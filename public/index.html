@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Хвостик</title>
+  <meta name="description" content="Журнал здоровья для собак и кошек: прививки, обработки от паразитов и вес с напоминаниями.">
+  <meta name="theme-color" content="#D4F0DE">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Хвостик">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+  <script>
+    // Тема ставится до отрисовки, чтобы страница не мигала светлой при тёмной настройке
+    try {
+      var t = localStorage.getItem('hvostik:theme');
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div class="shell">
+    <nav class="nav" aria-label="Разделы">
+      <a class="brand" href="#/">
+        <img src="/icon.svg" alt="" width="36" height="36">
+        <span>Хвостик</span>
+      </a>
+      <a class="tab" href="#/" data-route="feed">
+        <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M4 11l8-7 8 7v9H4z"/></svg>
+        <span>Главная</span>
+      </a>
+      <a class="tab" href="#/pets" data-route="pets">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><ellipse cx="12" cy="16" rx="4.6" ry="3.8"/><ellipse cx="6" cy="10.5" rx="1.9" ry="2.4"/><ellipse cx="18" cy="10.5" rx="1.9" ry="2.4"/><ellipse cx="9.2" cy="6.2" rx="1.8" ry="2.3"/><ellipse cx="14.8" cy="6.2" rx="1.8" ry="2.3"/></svg>
+        <span>Питомцы</span>
+      </a>
+      <button class="fab" type="button" data-act="add" aria-label="Новая запись">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        <span>Новая запись</span>
+      </button>
+      <a class="tab" href="#/settings" data-route="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        <span>Настройки</span>
+      </a>
+    </nav>
+    <main class="main" id="main" tabindex="-1"></main>
+  </div>
+  <div id="sheet"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <input type="file" id="import-file" accept="application/json,.json" hidden>
+  <noscript><p style="padding:24px">Для работы Хвостика нужно включить JavaScript в браузере.</p></noscript>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
