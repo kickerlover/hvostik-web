@@ -1,6 +1,6 @@
 // Офлайн-режим: сначала пробуем сеть (чтобы обновления приходили сразу), без сети отдаём сохранённую копию.
 // При изменении файлов сайта увеличьте номер версии, чтобы старый кэш удалился.
-const CACHE = 'hvostik-v2';
+const CACHE = 'hvostik-v3';
 const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
@@ -17,7 +17,8 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   const req = event.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  const u = new URL(req.url);
+  if (req.method !== 'GET' || u.origin !== self.location.origin || u.pathname.startsWith('/api/')) return;
   event.respondWith(
     fetch(req)
       .then(res => {

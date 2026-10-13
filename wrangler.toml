@@ -1,7 +1,16 @@
-# Публикация на Cloudflare: сайт состоит только из файлов в папке public.
+# Публикация на Cloudflare: файлы сайта из public и сервер src/worker.js для адресов /api/*.
 name = "hvostik"
+main = "src/worker.js"
 compatibility_date = "2026-10-01"
 
 [assets]
 directory = "./public"
+binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hvostik"
+database_id = "808e82f4-600d-47db-9b3b-e3ff02f7ff3e"
+migrations_dir = "migrations"

@@ -47,7 +47,7 @@ img { max-width: 100%; }
 /* ---------- Каркас ---------- */
 .main { max-width: 760px; margin: 0 auto; padding: calc(22px + env(safe-area-inset-top, 0px)) 18px calc(116px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 14px; outline: none; }
 
-.nav { position: fixed; z-index: 10; left: 0; right: 0; margin: 0 auto; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); width: calc(100% - 32px); max-width: 480px; height: 64px; background: var(--nav-bg); border-radius: 22px; box-shadow: var(--shadow-strong); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: center; }
+.nav { position: fixed; z-index: 10; left: 0; right: 0; margin: 0 auto; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); width: calc(100% - 24px); max-width: 520px; height: 64px; background: var(--nav-bg); border-radius: 22px; box-shadow: var(--shadow-strong); display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: center; }
 .nav .brand { display: none; }
 .tab { height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--nav-fg); font-size: 10.5px; text-decoration: none; border-radius: 14px; }
 .tab svg { width: 22px; height: 22px; }
@@ -84,6 +84,13 @@ img { max-width: 100%; }
 .stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .avatar { border-radius: 50%; display: grid; place-items: center; font-weight: 700; color: #2A1E12; flex: 0 0 auto; }
+.sync { font-size: 12.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; }
+.sync::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #3FA36B; flex: 0 0 auto; }
+.sync[data-state="syncing"]::before { background: var(--muted); }
+.sync[data-state="offline"]::before, .sync[data-state="error"]::before { background: var(--danger); }
+.key { display: block; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 15px; letter-spacing: 0.04em; background: var(--field); box-shadow: inset 0 0 0 1.5px var(--divider); border-radius: 12px; padding: 12px 14px; overflow-wrap: anywhere; user-select: all; }
+.link { color: var(--ink); font-weight: 500; }
+.btn-light.outline { box-shadow: inset 0 0 0 1.5px var(--divider); }
 .banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; background: var(--card); border-radius: 18px; padding: 10px 14px; font-size: 14px; box-shadow: var(--shadow); }
 
 .feed-grid { display: flex; flex-direction: column; gap: 14px; }
