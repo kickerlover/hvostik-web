@@ -521,10 +521,10 @@ function viewPetForm(id) {
     ${!p && db.demo ? '<div class="banner"><span>Сейчас открыт пример. Когда вы добавите своего питомца, пример уберётся.</span></div>' : ''}
     <form class="card pad form" id="pet-form" data-id="${p ? p.id : ''}" novalidate>
       <div class="field"><label for="pf-name">Кличка</label><input id="pf-name" name="name" type="text" maxlength="40" autocomplete="off" value="${esc(v.name)}" required></div>
-      <fieldset class="field"><legend>Кто это</legend><div class="chips">${kindOpt('dog', 'Собака')}${kindOpt('cat', 'Кошка')}${kindOpt('other', 'Другой')}</div></fieldset>
+      <div class="field" role="group" aria-label="Кто это"><span class="lbl" aria-hidden="true">Кто это</span><div class="chips">${kindOpt('dog', 'Собака')}${kindOpt('cat', 'Кошка')}${kindOpt('other', 'Другой')}</div></div>
       <div class="field"><label for="pf-breed">Порода (если знаете)</label><input id="pf-breed" name="breed" type="text" maxlength="60" autocomplete="off" value="${esc(v.breed)}"></div>
       <div class="field"><label for="pf-birth">Дата рождения (можно примерно)</label><input id="pf-birth" name="birth" type="date" max="${iso(T)}" value="${esc(v.birth)}"></div>
-      <fieldset class="field"><legend>Цвет в приложении</legend><div class="chips">${PET_COLORS.map((c, i) => `<label class="opt swatch" title="${c.name}"><input type="radio" name="color" value="${i}" ${v.color === i ? 'checked' : ''} aria-label="${c.name}"><span style="background:${c.bg}"></span></label>`).join('')}</div></fieldset>
+      <div class="field" role="group" aria-label="Цвет в приложении"><span class="lbl" aria-hidden="true">Цвет в приложении</span><div class="chips">${PET_COLORS.map((c, i) => `<label class="opt swatch" title="${c.name}"><input type="radio" name="color" value="${i}" ${v.color === i ? 'checked' : ''} aria-label="${c.name}"><span style="background:${c.bg}"></span></label>`).join('')}</div></div>
       <p class="err" id="pf-err" hidden></p>
       <button class="btn-primary" type="submit">${p ? 'Сохранить' : 'Добавить питомца'}</button>
     </form>
@@ -718,13 +718,13 @@ function renderSheet() {
   sheetHost.innerHTML = `<div class="scrim" data-act="sheet-cancel"><form class="sheet" id="add-form" role="dialog" aria-modal="true" aria-labelledby="sh-title" novalidate>
     <div class="grip"></div>
     <h3 id="sh-title">Новая запись</h3>
-    <fieldset class="field"><legend>Кто</legend><div class="who">${db.pets.map(p => `<button type="button" data-act="sheet-pet" data-v="${p.id}" aria-pressed="${sheet.pet === p.id}" style="${sheet.pet === p.id ? 'background:' + petColor(p).bg : ''}">${esc(p.name)}</button>`).join('')}</div></fieldset>
-    <fieldset class="field"><legend>Что</legend><div class="tiles">${tile('vaccine', 'Прививка')}${tile('treatment', 'Обработка')}${tile('weight', 'Вес')}</div></fieldset>
+    <div class="field" role="group" aria-label="Кто"><span class="lbl" aria-hidden="true">Кто</span><div class="who">${db.pets.map(p => `<button type="button" data-act="sheet-pet" data-v="${p.id}" aria-pressed="${sheet.pet === p.id}" style="${sheet.pet === p.id ? 'background:' + petColor(p).bg : ''}">${esc(p.name)}</button>`).join('')}</div></div>
+    <div class="field" role="group" aria-label="Что"><span class="lbl" aria-hidden="true">Что</span><div class="tiles">${tile('vaccine', 'Прививка')}${tile('treatment', 'Обработка')}${tile('weight', 'Вес')}</div></div>
     ${isW ? `<div class="field"><label for="f-kg">Сколько весит, кг</label><input id="f-kg" type="text" inputmode="decimal" placeholder="Например, 12,4" value="${esc(w)}" autocomplete="off"></div>`
       : `<div class="field"><label for="f-title">${sheet.type === 'vaccine' ? 'Какая прививка' : 'От чего обработка'}</label><input id="f-title" type="text" maxlength="80" autocomplete="off" placeholder="${sheet.type === 'vaccine' ? 'Например, бешенство' : 'Например, клещи и блохи'}" value="${esc(title)}">
          <div class="chips">${SUGGEST[sheet.type].map(s => `<button type="button" class="chip ghost" data-act="suggest" data-v="${esc(s)}">${esc(s)}</button>`).join('')}</div></div>`}
     <div class="field"><label for="f-date">Когда</label><input id="f-date" type="date" value="${esc(date)}" max="${iso(T)}"></div>
-    ${isW ? '' : `<fieldset class="field"><legend>Напомнить снова через</legend><div class="chips">${[[1, '1 мес'], [3, '3 мес'], [6, '6 мес'], [12, '1 год']].map(([m, l]) => `<button type="button" class="chip" data-act="sheet-months" data-v="${m}" aria-pressed="${sheet.months === m}">${l}</button>`).join('')}<button type="button" class="chip" data-act="sheet-months" data-v="0" aria-pressed="${sheet.months === 0}">не надо</button></div><span class="small">${remind} Срок подскажет ветеринар или инструкция.</span></fieldset>
+    ${isW ? '' : `<div class="field" role="group" aria-label="Напомнить снова через"><span class="lbl" aria-hidden="true">Напомнить снова через</span><div class="chips">${[[1, '1 мес'], [3, '3 мес'], [6, '6 мес'], [12, '1 год']].map(([m, l]) => `<button type="button" class="chip" data-act="sheet-months" data-v="${m}" aria-pressed="${sheet.months === m}">${l}</button>`).join('')}<button type="button" class="chip" data-act="sheet-months" data-v="0" aria-pressed="${sheet.months === 0}">не надо</button></div><span class="small">${remind} Срок подскажет ветеринар или инструкция.</span></div>
     <div class="field"><label for="f-note">Заметка</label><input id="f-note" type="text" maxlength="120" autocomplete="off" placeholder="Препарат, клиника" value="${esc(note)}"></div>`}
     ${sheet.error ? `<p class="err" role="alert">${esc(sheet.error)}</p>` : ''}
     <div class="actions"><button type="button" class="btn-light" data-act="sheet-cancel">Отмена</button><button type="submit" class="btn-primary">Сохранить</button></div>
