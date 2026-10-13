@@ -43,7 +43,7 @@ async function handle(req, env, url) {
   if (path === '/api/journal' && method === 'POST') {
     const body = await readJson(req);
     const name = cleanName(body.name);
-    await limit(db, ip(req), 'create', 10);
+    await limit(db, ip(req), 'create', 60);
     const journalId = crypto.randomUUID(), deviceId = crypto.randomUUID();
     const token = randomToken(), recoveryKey = randomCode(20);
     const now = Date.now();

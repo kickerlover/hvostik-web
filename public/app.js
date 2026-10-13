@@ -340,7 +340,8 @@ function spark(ws, p) {
   const W = 140, H = 32, vals = ws.map(w => w.kg), lo = Math.min(...vals), hi = Math.max(...vals), span = Math.max(hi - lo, 0.1);
   const pts = ws.map((w, i) => [4 + i / (ws.length - 1) * (W - 10), 5 + (1 - (w.kg - lo) / span) * (H - 10)]);
   const last = pts.at(-1);
-  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts.map(q => q.map(n => n.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="var(--ink)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${last[0]}" cy="${last[1]}" r="4" fill="${petColor(p).strong}"/></svg>`;
+  // График растягивается по ширине карточки; линия и точка рисуются без растяжения, поэтому точка остаётся круглой
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts.map(q => q.map(n => n.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="var(--ink)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/><line x1="${last[0]}" y1="${last[1]}" x2="${last[0]}" y2="${last[1]}" stroke="${petColor(p).strong}" stroke-width="9" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>`;
 }
 const deltaText = ws => {
   if (ws.length < 2) return ws.length ? 'для графика нужно ещё одно взвешивание' : 'вес ещё не записан';
@@ -351,7 +352,7 @@ const deltaText = ws => {
 function hotCard(u, showPet) {
   const p = petById(u.pet), n = -u.d;
   const box = n === 0 ? '<div class="daybox big alarm"><b>0</b><span>сегодня</span></div>' : `<div class="daybox big alarm"><b>−${n}</b><span>${dayWord(n)}</span></div>`;
-  const sub = [showPet ? p.name : '', u.note.toLowerCase(), every(u.months)].filter(Boolean);
+  const sub = [showPet ? p.name : '', u.note, every(u.months)].filter(Boolean);
   const subText = showPet ? sub[0] + (sub.length > 1 ? ' · ' + sub.slice(1).join(', ') : '') : sub.join(', ');
   return `<div class="hot">
     <div class="hot-row">${box}<div class="grow" style="gap:2px"><span class="title">${esc(u.title)}</span><span class="sub">${esc(subText)}${u.moved ? ' · перенесено' : ''}</span></div></div>
@@ -447,6 +448,17 @@ function viewPets() {
     ${!db.pets.length ? '<div class="card pad"><span class="small">Добавьте первого питомца, чтобы начать вести журнал.</span></div>' : ''}`;
 }
 
+// Подписи месяцев под графиком: не больше шести, повторы месяца не пишем, первая и последняя видны всегда
+function monthLabels(shown) {
+  const step = Math.ceil(shown.length / 6);
+  return shown.map((w, i) => {
+    const m = parseIso(w.date).getMonth();
+    const repeat = i && parseIso(shown[i - 1].date).getMonth() === m;
+    const keep = i === 0 || i === shown.length - 1 || (i % step === 0 && shown.length - 1 - i >= step);
+    return `<span>${keep && !repeat ? MON1[m] : ''}</span>`;
+  }).join('');
+}
+
 function weightChart(ws, p) {
   if (ws.length < 2) {
     return `<div class="card chart"><span class="big-num">${ws.length ? kg(ws[0].kg) + ' кг' : 'Вес не записан'}</span><span class="small">Чтобы появился график, нужно хотя бы два взвешивания.</span></div>`;
@@ -465,7 +477,7 @@ function weightChart(ws, p) {
       ${pts.slice(0, -1).map(q => `<circle cx="${q[0]}" cy="${q[1]}" r="3.5" fill="var(--card)" stroke="var(--ink)" stroke-width="2"/>`).join('')}
       <circle cx="${last[0]}" cy="${last[1]}" r="7" fill="${c.strong}"/>
     </svg>
-    <div class="months">${shown.map((w, i) => { const m = parseIso(w.date).getMonth(); return `<span>${i && parseIso(shown[i - 1].date).getMonth() === m ? '' : MON1[m]}</span>`; }).join('')}</div>
+    <div class="months">${monthLabels(shown)}</div>
   </div>`;
 }
 
@@ -492,7 +504,7 @@ function viewPet(id) {
   }
   const metaLine = [p.breed || KIND[p.kind], age(p.birth)].filter(Boolean).join(' · ');
   return `<div class="head"><a class="round" href="#/pets" aria-label="Назад к питомцам">${ICONS.back}</a><a class="round" href="#/pet/${p.id}/edit" aria-label="Изменить данные питомца">${ICONS.edit}</a></div>
-    <header class="pet-head">${avatar(p, 80)}<div class="top"><h1 class="h1" style="font-size:34px">${esc(p.name)}</h1><span class="eyebrow">${esc(metaLine)}</span></div></header>
+    <header class="pet-head">${avatar(p, 80)}<div class="top"><h1 class="h1 big">${esc(p.name)}</h1><span class="eyebrow">${esc(metaLine)}</span></div></header>
     ${weightChart(ws, p)}
     <div class="seg" role="group" aria-label="Раздел">${segBtn('treatment', 'Обработки')}${segBtn('vaccine', 'Прививки')}${segBtn('weight', 'Вес')}</div>
     ${body}

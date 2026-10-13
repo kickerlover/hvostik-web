@@ -1,6 +1,6 @@
 // Офлайн-режим: сначала пробуем сеть (чтобы обновления приходили сразу), без сети отдаём сохранённую копию.
 // При изменении файлов сайта увеличьте номер версии, чтобы старый кэш удалился.
-const CACHE = 'hvostik-v3';
+const CACHE = 'hvostik-v4';
 const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
