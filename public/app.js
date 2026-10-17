@@ -5,7 +5,7 @@
 const STORE_KEY = 'hvostik:data:v1';
 const SYNC_KEY = 'hvostik:sync:v1';
 const THEME_KEY = 'hvostik:theme';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 
 // ---------- Даты ----------
 const DAY = 864e5;
@@ -61,12 +61,15 @@ const emptyData = () => ({ version: 1, demo: false, pets: [], records: [], weigh
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const okId = v => typeof v === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(v);
 const okTs = v => (Number.isFinite(v) ? v : 0);
+// Фото питомца: маленький квадратный JPEG прямо в записи (data:-ссылка), чтобы храниться и синхронизироваться вместе с ней
+const PHOTO_MAX = 70000;
+const okPhoto = v => typeof v === 'string' && v.length <= PHOTO_MAX && /^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/.test(v);
 
 // Чистка одной записи: из браузера, файла копии или с сервера. Битая запись → null.
 const CLEAN = {
   pet: p => (p && okId(p.id) && str(p.name, 40) ? {
     id: p.id, name: str(p.name, 40), kind: KIND[p.kind] ? p.kind : 'other', breed: str(p.breed, 60),
-    birth: isIso(p.birth) ? p.birth : '', color: Number.isInteger(p.color) && PET_COLORS[p.color] ? p.color : 0, ts: okTs(p.ts)
+    birth: isIso(p.birth) ? p.birth : '', color: Number.isInteger(p.color) && PET_COLORS[p.color] ? p.color : 0, photo: okPhoto(p.photo) ? p.photo : '', ts: okTs(p.ts)
   } : null),
   record: r => (r && okId(r.id) && okId(r.pet) && (r.type === 'vaccine' || r.type === 'treatment') && str(r.title, 80) && isIso(r.date) ? {
     id: r.id, pet: r.pet, type: r.type, title: str(r.title, 80), date: r.date,
@@ -223,15 +226,18 @@ async function sync() {
     if (!(await ensureJournal())) return;
     setSync('syncing');
     for (let round = 0; round < 50; round++) {
-      const keys = Object.keys(meta.pending).slice(0, 200);
-      const sent = {};
-      const changes = keys.map(k => {
+      // В одной пачке не больше 200 изменений и примерно 700 КБ (питомцы с фото тяжелее остальных записей)
+      const keys = [], changes = [], sent = {};
+      let size = 0;
+      for (const k of Object.keys(meta.pending)) {
         const p = meta.pending[k];
-        sent[k] = p.ts;
         const [kind, id] = k.split(':');
         const ent = p.deleted ? null : db[LIST[kind]].find(e => e.id === id);
-        return ent ? { kind, id, ts: p.ts, data: ent } : { kind, id, ts: p.ts, deleted: true };
-      });
+        const c = ent ? { kind, id, ts: p.ts, data: ent } : { kind, id, ts: p.ts, deleted: true };
+        const len = JSON.stringify(c).length;
+        if (keys.length && (keys.length >= 200 || size + len > 700000)) break;
+        keys.push(k); changes.push(c); sent[k] = p.ts; size += len;
+      }
       const res = await api('POST', '/api/sync', { since: meta.cursor, changes });
       for (const k of keys) if (meta.pending[k] && meta.pending[k].ts === sent[k]) delete meta.pending[k];
       if (applyRemote(res.items)) changed = true;
@@ -322,7 +328,10 @@ function upcoming({ pet, type } = {}) {
 }
 
 // ---------- Мелкие части интерфейса ----------
-const avatar = (p, size) => `<span class="avatar" style="background:${petColor(p).bg};width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px" aria-hidden="true">${esc(p.name[0].toUpperCase())}</span>`;
+// Кружок питомца: фото, а если его нет — первая буква клички на цвете питомца
+const avatar = (p, size) => okPhoto(p.photo)
+  ? `<span class="avatar photo" style="background-image:url(${p.photo});width:${size}px;height:${size}px" aria-hidden="true"></span>`
+  : `<span class="avatar" style="background:${petColor(p).bg};width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px" aria-hidden="true">${esc((p.name || '?')[0].toUpperCase())}</span>`;
 const personAvatar = (name, size, mine) => `<span class="avatar" style="background:${mine ? 'var(--chip-bg)' : 'var(--field)'};color:var(--ink);width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;box-shadow:inset 0 0 0 1.5px var(--divider)" aria-hidden="true">${esc((name || '?')[0].toUpperCase())}</span>`;
 const ICONS = {
   check: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
@@ -331,7 +340,8 @@ const ICONS = {
   trash: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
   vaccine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 3l3 3M16 5l3 3M14 7l-8 8-2 5 5-2 8-8z"/></svg>',
   treatment: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3c3 4 5 7 5 10a5 5 0 0 1-10 0c0-3 2-6 5-10z"/></svg>',
-  weight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="15" rx="3"/><path d="M8 11a4 4 0 0 1 8 0M12 11l2-2"/></svg>'
+  weight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="15" rx="3"/><path d="M8 11a4 4 0 0 1 8 0M12 11l2-2"/></svg>',
+  camera: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>'
 };
 const syncLine = () => (meta ? `<span class="sync" data-sync-status data-state="${syncStatus}">${esc(syncText())}</span>` : '');
 
@@ -514,12 +524,14 @@ function viewPet(id) {
 function viewPetForm(id) {
   const p = id ? petById(id) : null;
   if (id && !p) return viewMissing();
-  const v = p || { name: '', kind: 'dog', breed: '', birth: '', color: db.pets.length % PET_COLORS.length };
+  const v = p || { name: '', kind: 'dog', breed: '', birth: '', color: db.pets.length % PET_COLORS.length, photo: '' };
+  if (photoDraft.key !== location.hash) photoDraft = { key: location.hash, value: v.photo || '' };
   const kindOpt = (k, label) => `<label class="opt"><input type="radio" name="kind" value="${k}" ${v.kind === k ? 'checked' : ''}><span>${label}</span></label>`;
   return `<div class="head"><a class="round" href="${p ? '#/pet/' + p.id : '#/pets'}" aria-label="Назад">${ICONS.back}</a></div>
     <h1 class="h1">${p ? 'Изменить данные' : 'Новый питомец'}</h1>
     ${!p && db.demo ? '<div class="banner"><span>Сейчас открыт пример. Когда вы добавите своего питомца, пример уберётся.</span></div>' : ''}
     <form class="card pad form" id="pet-form" data-id="${p ? p.id : ''}" novalidate>
+      <div class="field" role="group" aria-label="Фото"><span class="lbl" aria-hidden="true">Фото (по желанию)</span><div class="photo-pick" id="pf-photo">${photoField(v)}</div></div>
       <div class="field"><label for="pf-name">Кличка</label><input id="pf-name" name="name" type="text" maxlength="40" autocomplete="off" value="${esc(v.name)}" required></div>
       <div class="field" role="group" aria-label="Кто это"><span class="lbl" aria-hidden="true">Кто это</span><div class="chips">${kindOpt('dog', 'Собака')}${kindOpt('cat', 'Кошка')}${kindOpt('other', 'Другой')}</div></div>
       <div class="field"><label for="pf-breed">Порода (если знаете)</label><input id="pf-breed" name="breed" type="text" maxlength="60" autocomplete="off" value="${esc(v.breed)}"></div>
@@ -530,6 +542,52 @@ function viewPetForm(id) {
     </form>
     ${p ? `<button class="btn-danger" data-act="del-pet" data-id="${p.id}">Удалить ${esc(p.name)} и все записи</button>` : ''}`;
 }
+
+// Выбранное, но ещё не сохранённое фото в форме питомца
+let photoDraft = { key: '', value: '' };
+function photoField(v) {
+  const has = okPhoto(photoDraft.value);
+  return `<button type="button" class="photo-btn" data-act="pick-photo" aria-label="${has ? 'Заменить фото' : 'Выбрать фото'}">${has ? avatar({ ...v, photo: photoDraft.value }, 72) : `<span class="avatar photo-empty" style="width:72px;height:72px">${ICONS.camera}</span>`}</button>
+    <div class="row-btns"><button type="button" class="btn-light outline" data-act="pick-photo">${has ? 'Заменить' : 'Выбрать фото'}</button>${has ? '<button type="button" class="btn-light outline" data-act="remove-photo">Убрать</button>' : ''}</div>`;
+}
+function refreshPhotoField() {
+  const box = document.getElementById('pf-photo');
+  if (box) box.innerHTML = photoField({});
+}
+
+// Сжать снимок: квадрат по центру, 320×320, JPEG. Получается около 20–40 КБ.
+async function makePhoto(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = url; });
+    const w = img.naturalWidth, h = img.naturalHeight, side = Math.min(w, h);
+    if (!side) throw new Error('empty image');
+    const size = Math.min(320, side);
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, size, size); // прозрачный фон PNG станет белым, а не чёрным
+    ctx.drawImage(img, (w - side) / 2, (h - side) / 2, side, side, 0, 0, size, size);
+    let q = 0.82, out = canvas.toDataURL('image/jpeg', q);
+    while (out.length > PHOTO_MAX - 2000 && q > 0.35) { q -= 0.12; out = canvas.toDataURL('image/jpeg', q); }
+    if (!okPhoto(out)) throw new Error('photo too big');
+    return out;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+const photoInput = document.getElementById('photo-file');
+photoInput.addEventListener('change', async () => {
+  const file = photoInput.files && photoInput.files[0];
+  photoInput.value = '';
+  if (!file) return;
+  try {
+    photoDraft = { key: location.hash, value: await makePhoto(file) };
+    refreshPhotoField();
+  } catch (e) {
+    toast('Не получилось открыть это фото. Попробуйте другое, например в формате JPG или PNG.');
+  }
+});
 
 function seenText(m) {
   if (m.me) return 'это устройство';
@@ -877,6 +935,8 @@ document.addEventListener('click', e => {
     case 'demo': db = demoData(); persist(); render(); toast('Загрузили пример. Его можно убрать одной кнопкой.'); break;
     case 'clear-demo': openConfirm({ title: 'Убрать пример?', text: 'Рекс, Мурка и все их записи удалятся.', ok: 'Убрать', onOk: () => { db = emptyData(); persist(); closeSheet(); render(); } }); break;
     case 'theme': try { if (v === 'system') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, v); } catch (err) { /* тема просто не запомнится */ } applyTheme(); render(); break;
+    case 'pick-photo': photoInput.click(); break;
+    case 'remove-photo': photoDraft = { key: location.hash, value: '' }; refreshPhotoField(); break;
     case 'export': exportData(); break;
     case 'import': importInput.click(); break;
     case 'wipe':
@@ -930,12 +990,13 @@ document.addEventListener('submit', async e => {
     if (!name) { formError('pf-err', 'Напишите кличку.'); f.elements.name.focus(); return; }
     const birth = f.elements.birth.value;
     if (birth && (!isIso(birth) || parseIso(birth) > T)) { formError('pf-err', 'Дата рождения не может быть в будущем.'); return; }
-    const data = { name: name.slice(0, 40), kind: f.elements.kind.value || 'dog', breed: f.elements.breed.value.trim().slice(0, 60), birth: birth || '', color: Number(f.elements.color.value) || 0 };
+    const data = { name: name.slice(0, 40), kind: f.elements.kind.value || 'dog', breed: f.elements.breed.value.trim().slice(0, 60), birth: birth || '', color: Number(f.elements.color.value) || 0, photo: photoDraft.key === location.hash && okPhoto(photoDraft.value) ? photoDraft.value : '' };
     if (!id && db.demo) db = emptyData(); // свой питомец заменяет пример
     let pet;
     if (id) { pet = petById(id); Object.assign(pet, data); }
     else { pet = { id: uid(), ...data }; db.pets.push(pet); }
     touch('pet', pet);
+    photoDraft = { key: '', value: '' };
     if (!save()) return;
     toast(id ? 'Сохранили' : `${data.name} в журнале. Добавьте последнюю прививку или обработку.`);
     location.hash = '#/pet/' + pet.id;

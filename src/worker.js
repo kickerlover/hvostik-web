@@ -7,6 +7,7 @@ const INVITE_TTL = 7 * DAY;
 const MAX_CHANGES = 200;      // изменений за один запрос
 const MAX_ITEMS = 5000;       // записей в одном журнале
 const MAX_DATA = 4000;        // размер одной записи, символов
+const MAX_PET_DATA = 80000;   // питомец может быть с фото (сжатый JPEG до 70 000 символов)
 const PAGE = 1000;            // записей в одном ответе
 const KINDS = new Set(['pet', 'record', 'weight']);
 const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'; // без похожих 0/O, 1/I/L
@@ -212,7 +213,7 @@ function cleanChange(c) {
   if (c.deleted) return { kind: c.kind, id: c.id, data: null, deleted: true, ts: Math.trunc(c.ts) };
   if (!c.data || typeof c.data !== 'object') throw new HttpError(400, 'bad_change');
   const data = JSON.stringify(c.data);
-  if (data.length > MAX_DATA) throw new HttpError(413, 'item_too_big');
+  if (data.length > (c.kind === 'pet' ? MAX_PET_DATA : MAX_DATA)) throw new HttpError(413, 'item_too_big');
   return { kind: c.kind, id: c.id, data, deleted: false, ts: Math.trunc(c.ts) };
 }
 
