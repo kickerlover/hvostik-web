@@ -1,6 +1,9 @@
 // Сервер Хвостика: семейные журналы без входа.
 // Файлы сайта отдаёт Cloudflare сам, сюда попадают только запросы /api/*.
 // Доступ к журналу даёт ключ устройства (заголовок Authorization: Bearer <ключ>). В базе хранится только его хэш.
+// Раз в час Cloudflare запускает scheduled(): рассылка напоминаний тем, у кого наступил выбранный час.
+
+import { sendPush, vapidPublicKey, okEndpoint } from './push.js';
 
 const DAY = 864e5;
 const INVITE_TTL = 7 * DAY;
@@ -10,6 +13,7 @@ const MAX_DATA = 4000;        // размер одной записи, симв�
 const MAX_PET_DATA = 80000;   // питомец может быть с фото (сжатый JPEG до 70 000 символов)
 const PAGE = 1000;            // записей в одном ответе
 const KINDS = new Set(['pet', 'record', 'weight']);
+const MAX_PLAN = 400;         // напоминаний в плане журнала
 const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'; // без похожих 0/O, 1/I/L
 
 const HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
@@ -27,6 +31,9 @@ export default {
       console.error(e);
       return fail(500, 'server');
     }
+  },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(sendReminders(env));
   }
 };
 
@@ -40,6 +47,7 @@ async function handle(req, env, url) {
   const method = req.method;
 
   if (path === '/api/health') return json({ ok: true });
+  if (path === '/api/push/key' && method === 'GET') return json({ key: vapidPublicKey(env) });
 
   if (path === '/api/journal' && method === 'POST') {
     const body = await readJson(req);
@@ -147,7 +155,10 @@ async function handle(req, env, url) {
   }
 
   if (path === '/api/leave' && method === 'POST') {
-    await db.prepare('DELETE FROM devices WHERE id = ?').bind(me.id).run();
+    await db.batch([
+      db.prepare('DELETE FROM devices WHERE id = ?').bind(me.id),
+      db.prepare('DELETE FROM push_subs WHERE device_id = ?').bind(me.id)
+    ]);
     return json({ ok: true });
   }
 
@@ -156,6 +167,7 @@ async function handle(req, env, url) {
     if (devMatch[1] === me.id) throw new HttpError(400, 'use_leave');
     const r = await db.prepare('DELETE FROM devices WHERE id = ? AND journal_id = ?').bind(devMatch[1], me.journal_id).run();
     if (!r.meta.changes) throw new HttpError(404, 'no_device');
+    await db.prepare('DELETE FROM push_subs WHERE device_id = ?').bind(devMatch[1]).run();
     return json({ members: await members(db, me) });
   }
 
@@ -171,13 +183,121 @@ async function handle(req, env, url) {
       db.prepare('DELETE FROM items WHERE journal_id = ?').bind(id),
       db.prepare('DELETE FROM invites WHERE journal_id = ?').bind(id),
       db.prepare('DELETE FROM devices WHERE journal_id = ?').bind(id),
+      db.prepare('DELETE FROM push_subs WHERE journal_id = ?').bind(id),
+      db.prepare('DELETE FROM push_plans WHERE journal_id = ?').bind(id),
+      db.prepare('DELETE FROM push_log WHERE journal_id = ?').bind(id),
       db.prepare('DELETE FROM journals WHERE id = ?').bind(id)
     ]);
     return json({ ok: true });
   }
 
+  // ---------- Напоминания ----------
+  if (path === '/api/push/subscribe' && method === 'POST') {
+    const b = await readJson(req);
+    const keys = b.keys || {};
+    if (!okEndpoint(b.endpoint) || !okKey(keys.p256dh, 87, 88) || !okKey(keys.auth, 22, 24)) throw new HttpError(400, 'bad_subscription');
+    const hour = Number.isInteger(b.hour) && b.hour >= 0 && b.hour <= 23 ? b.hour : 10;
+    const tz = okTz(b.tz) ? b.tz : 'Europe/Moscow';
+    // У устройства одна подписка: прежнюю (если браузер выдал новый адрес) убираем.
+    // last_day сохраняем, чтобы смена часа не прислала напоминания второй раз за день.
+    const old = await db.prepare('SELECT last_day FROM push_subs WHERE device_id = ? OR endpoint = ?').bind(me.id, b.endpoint).first();
+    await db.batch([
+      db.prepare('DELETE FROM push_subs WHERE device_id = ? OR endpoint = ?').bind(me.id, b.endpoint),
+      db.prepare('INSERT INTO push_subs (endpoint, device_id, journal_id, p256dh, auth, hour, tz, last_day, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(b.endpoint, me.id, me.journal_id, keys.p256dh, keys.auth, hour, tz, old ? old.last_day : '', Date.now())
+    ]);
+    return json({ ok: true, hour, tz });
+  }
+
+  if (path === '/api/push/unsubscribe' && method === 'POST') {
+    await db.prepare('DELETE FROM push_subs WHERE device_id = ?').bind(me.id).run();
+    return json({ ok: true });
+  }
+
+  if (path === '/api/push/test' && method === 'POST') {
+    const sub = await db.prepare('SELECT * FROM push_subs WHERE device_id = ?').bind(me.id).first();
+    if (!sub) throw new HttpError(404, 'no_subscription');
+    const status = await sendPush(sub, { title: 'Пробное уведомление', body: `Напоминания работают. Когда подойдёт срок, пришлём в ${sub.hour}:00.`, tag: 'hvostik-test' }, env);
+    if (status === 404 || status === 410) {
+      await db.prepare('DELETE FROM push_subs WHERE endpoint = ?').bind(sub.endpoint).run();
+      throw new HttpError(410, 'subscription_gone');
+    }
+    if (status >= 300) { console.error('push test', status); throw new HttpError(502, 'push_failed'); }
+    return json({ ok: true });
+  }
+
+  if (path === '/api/push/log' && method === 'GET') {
+    const rows = (await db.prepare('SELECT day, items, sent_at FROM push_log WHERE journal_id = ? ORDER BY day DESC LIMIT 90').bind(me.journal_id).all()).results;
+    return json({ log: rows.map(r => ({ day: r.day, items: JSON.parse(r.items), sentAt: r.sent_at })) });
+  }
+
+  if (path === '/api/push/plan' && method === 'POST') {
+    const b = await readJson(req);
+    if (!Array.isArray(b.items) || b.items.length > MAX_PLAN) throw new HttpError(400, 'bad_plan');
+    const items = [];
+    for (const it of b.items) {
+      if (!it || typeof it.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(it.day) || typeof it.pet !== 'string' || typeof it.text !== 'string') continue;
+      const pet = it.pet.trim().slice(0, 40), text = it.text.trim().slice(0, 160);
+      if (pet && text) items.push({ day: it.day, pet, text });
+    }
+    await db.prepare('INSERT INTO push_plans (journal_id, data, updated_at) VALUES (?, ?, ?) ON CONFLICT (journal_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at')
+      .bind(me.journal_id, JSON.stringify(items), Date.now()).run();
+    return json({ ok: true, count: items.length });
+  }
+
   throw new HttpError(404, 'not_found');
 }
+
+// ---------- Рассылка напоминаний (раз в час) ----------
+// Каждому устройству — одно уведомление в день, в выбранный час по его часовому поясу.
+// Если запуск в нужный час пропал, догоняем в следующие два часа; позже не шлём, чтобы не будить ночью.
+async function sendReminders(env) {
+  const db = env.DB;
+  const now = new Date();
+  await db.prepare('DELETE FROM push_log WHERE sent_at < ?').bind(now.getTime() - 90 * DAY).run();
+  const subs = (await db.prepare('SELECT s.*, p.data AS plan FROM push_subs s LEFT JOIN push_plans p ON p.journal_id = s.journal_id').all()).results;
+  for (const s of subs) {
+    const { day, hour } = localTime(now, s.tz);
+    if (s.last_day === day || hour < s.hour || hour > s.hour + 2) continue;
+    await db.prepare('UPDATE push_subs SET last_day = ? WHERE endpoint = ?').bind(day, s.endpoint).run();
+    let plan = [];
+    try { plan = JSON.parse(s.plan || '[]'); } catch { /* испорченный план — просто пропускаем */ }
+    const items = plan.filter(it => it.day === day);
+    if (!items.length) continue;
+    try {
+      const status = await sendPush(s, reminderMessage(items, day), env);
+      if (status < 300) {
+        await db.prepare('INSERT OR IGNORE INTO push_log (journal_id, day, items, sent_at) VALUES (?, ?, ?, ?)')
+          .bind(s.journal_id, day, JSON.stringify(items.map(it => ({ pet: it.pet, text: it.text }))), Date.now()).run();
+      }
+      if (status === 404 || status === 410) await db.prepare('DELETE FROM push_subs WHERE endpoint = ?').bind(s.endpoint).run();
+      else if (status >= 300) console.error('push', status, new URL(s.endpoint).hostname);
+    } catch (e) {
+      console.error('push', e);
+    }
+  }
+}
+
+// Одно дело — кличка в заголовке; несколько — списком.
+// Название приложения в заголовок не ставим: iPhone сам подписывает «from Хвостик».
+function reminderMessage(items, day) {
+  if (items.length === 1) return { title: items[0].pet, body: items[0].text, tag: 'hvostik-' + day };
+  const lines = items.slice(0, 4).map(it => `${it.pet}: ${it.text}`);
+  if (items.length > 4) lines.push(`И ещё ${items.length - 4}`);
+  return { title: `Дела на сегодня: ${items.length}`, body: lines.join('\n'), tag: 'hvostik-' + day };
+}
+
+// Дата и час в часовом поясе устройства
+function localTime(date, tz) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
+    .formatToParts(date).map(p => [p.type, p.value]));
+  return { day: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
+}
+function okTz(tz) {
+  if (typeof tz !== 'string' || tz.length > 60) return false;
+  try { new Intl.DateTimeFormat('en', { timeZone: tz }); return true; } catch { return false; }
+}
+const okKey = (v, min, max) => typeof v === 'string' && v.length >= min && v.length <= max && /^[A-Za-z0-9_-]+=*$/.test(v);
 
 // ---------- Проверки ----------
 async function auth(req, db) {

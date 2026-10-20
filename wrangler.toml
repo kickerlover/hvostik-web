@@ -14,3 +14,7 @@ binding = "DB"
 database_name = "hvostik"
 database_id = "808e82f4-600d-47db-9b3b-e3ff02f7ff3e"
 migrations_dir = "migrations"
+
+# Раз в час: рассылка напоминаний (src/worker.js → scheduled). Ключ подписи — секрет VAPID_PRIVATE_JWK.
+[triggers]
+crons = ["0 * * * *"]

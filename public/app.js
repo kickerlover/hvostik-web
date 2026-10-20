@@ -5,7 +5,7 @@
 const STORE_KEY = 'hvostik:data:v1';
 const SYNC_KEY = 'hvostik:sync:v1';
 const THEME_KEY = 'hvostik:theme'; // тёмной темы больше нет, ключ стирается при запуске
-const APP_VERSION = '1.9.6';
+const APP_VERSION = '1.15.3';
 
 // ---------- Даты ----------
 const DAY = 864e5;
@@ -56,8 +56,28 @@ const TYPES = {
 // Как повторяется дело: «раз в 3 месяца» или «повторный приём»
 // Интервал напоминания: в месяцах (months) или в днях (repDays — для «своего» интервала в днях и неделях)
 const everyDays = d => d % 7 === 0 ? (d === 7 ? 'раз в неделю' : `раз в ${d / 7} ${plural(d / 7, 'неделю', 'недели', 'недель')}`) : d === 1 ? 'каждый день' : `раз в ${d} ${plural(d, 'день', 'дня', 'дней')}`;
-const everyRec = r => (r.repDays ? everyDays(r.repDays) : r.months ? every(r.months) : '');
 const nextByRep = (from, r) => (r.repDays ? addDays(from, r.repDays) : addMonths(from, r.months));
+// Сезон: напоминать только в эти месяцы, например с марта по ноябрь (строка «3-11»; пусто — круглый год).
+// Сезон может переходить через Новый год: «11-2» — с ноября по февраль.
+const MONN = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+const parseSeason = v => {
+  const m = /^(\d{1,2})-(\d{1,2})$/.exec(typeof v === 'string' ? v : '');
+  if (!m) return null;
+  const from = Number(m[1]), to = Number(m[2]);
+  return from >= 1 && from <= 12 && to >= 1 && to <= 12 && from !== to ? { from, to } : null;
+};
+const inSeason = (d, s) => { const m = d.getMonth() + 1; return s.from <= s.to ? m >= s.from && m <= s.to : m >= s.from || m <= s.to; };
+// Ближайшее 1-е число месяца сезона, начиная с d (или сам d, если он уже в сезоне)
+const seasonFrom = (d, s) => {
+  if (inSeason(d, s)) return d;
+  let x = new Date(d.getFullYear(), d.getMonth(), 1, 12);
+  for (let i = 0; i < 12 && !inSeason(x, s); i++) x = addMonths(x, 1);
+  return x;
+};
+const seasonText = v => { const s = parseSeason(v); return s ? `с ${MONF[s.from - 1]} по ${MONN[s.to - 1]}` : ''; };
+// Следующий срок: дата + интервал; вне сезона — первое число первого месяца сезона
+const nextDue = (from, r) => { const d = nextByRep(from, r), s = parseSeason(r.season); return s ? seasonFrom(d, s) : d; };
+const everyRec = r => [r.repDays ? everyDays(r.repDays) : r.months ? every(r.months) : '', r.repDays || r.months ? seasonText(r.season) : ''].filter(Boolean).join(', ');
 const hasRep = r => r.months > 0 || r.repDays > 0;
 const REP_MAX = { d: 730, w: 104, m: 36 };
 // Как повторяется дело: «раз в 3 месяца», «раз в 2 недели» или «повторный приём»
@@ -104,7 +124,7 @@ const CLEAN = {
     id: r.id, pet: r.pet, type: r.type, title: str(r.title, 80), date: r.date,
     months: Number.isInteger(r.months) && r.months >= 0 && r.months <= 36 ? r.months : 0,
     repDays: Number.isInteger(r.repDays) && r.repDays >= 1 && r.repDays <= 730 ? r.repDays : 0,
-    note: str(r.note, 300), concl: str(r.concl, 1500), meds: str(r.meds, 1500), nextDate: isIso(r.nextDate) ? r.nextDate : '', cost: Number.isFinite(r.cost) && r.cost > 0 && r.cost < 1e7 ? Math.round(r.cost * 100) / 100 : 0, by: str(r.by, 30), snooze: isIso(r.snooze) ? r.snooze : null, created: okTs(r.created), ts: okTs(r.ts),
+    note: str(r.note, 300), concl: str(r.concl, 1500), meds: str(r.meds, 1500), nextDate: isIso(r.nextDate) ? r.nextDate : '', season: parseSeason(r.season) ? r.season : '', cost: Number.isFinite(r.cost) && r.cost > 0 && r.cost < 1e7 ? Math.round(r.cost * 100) / 100 : 0, by: str(r.by, 30), snooze: isIso(r.snooze) ? r.snooze : null, created: okTs(r.created), ts: okTs(r.ts),
     ...(r.type === 'course' ? cleanCourse(r) : {})
   } : null),
   weight: w => (w && okId(w.id) && okId(w.pet) && isIso(w.date) && Number.isFinite(w.kg) && w.kg > 0 && w.kg < 200 ? { id: w.id, pet: w.pet, date: w.date, kg: w.kg, ts: okTs(w.ts) } : null)
@@ -240,7 +260,7 @@ let syncStatus = 'idle', syncedAt = 0, syncing = false, syncAgain = false, syncT
 function setSync(s) {
   syncStatus = s;
   if (s === 'ok') syncedAt = Date.now();
-  document.querySelectorAll('[data-sync-status]').forEach(el => { el.textContent = syncText(); el.dataset.state = syncStatus; });
+  document.querySelectorAll('[data-sync-status]').forEach(el => { el.textContent = syncText(); el.dataset.state = syncStatus; el.hidden = !syncProblem(); });
 }
 function syncText() {
   if (!meta) return '';
@@ -288,6 +308,8 @@ async function sync() {
       if (!res.more && !Object.keys(meta.pending).length) break;
     }
     setSync('ok');
+    uploadPlan();
+    fetchLog();
   } catch (e) {
     if (e.status === 401 && meta) { revoked(); changed = true; }
     else setSync(e.status ? 'error' : 'offline');
@@ -331,6 +353,163 @@ function revoked() {
   toast('Это устройство отключили от семейного журнала. У остальных участников записи остались.');
 }
 
+// ---------- Напоминания (Web Push) ----------
+// Сроки считает приложение: после каждой синхронизации отправляет на сервер план «какого числа о чём напомнить».
+// Сервер раз в час проверяет, у кого наступил выбранный час, и присылает уведомление о делах на сегодня.
+// На iPhone уведомления работают, только если Хвостик открыт с экрана «Домой» (iOS 16.4 и новее).
+const INSTALL_KEY = 'hvostik:install-seen';
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isAndroid = /Android/.test(navigator.userAgent);
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+let installPrompt = null; // Android Chrome: системное окно «Установить приложение»
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
+
+// Без включённых уведомлений срок просто появится на главной — не обещаем лишнего
+const remindWord = () => (meta && meta.push ? 'Напомним' : 'Покажем на главной');
+
+// Что и когда напомнить: за день, в день срока, через 3 дня и через неделю, если не отметили; по курсу — каждый день
+function pushPlan() {
+  const out = [], today = iso(T);
+  const add = (date, pet, text) => { const day = iso(date); if (day >= today) out.push({ day, pet: pet.name, text }); };
+  for (const u of upcoming()) {
+    const p = petById(u.pet);
+    const what = u.type === 'visit' ? `повторный приём у врача (${u.title})` : u.title;
+    add(addDays(u.next, -1), p, `Завтра: ${what}`);
+    add(u.next, p, `Сегодня: ${what}`);
+    add(addDays(u.next, 3), p, `Просрочено на 3 дня: ${what}`);
+    add(addDays(u.next, 7), p, `Просрочено на неделю: ${what}`);
+  }
+  for (const c of db.records) {
+    const p = petById(c.pet);
+    if (c.type !== 'course' || c.stopped || !p) continue;
+    for (let i = 0; i < c.days; i++) {
+      const d = addDays(parseIso(c.date), i), day = iso(d);
+      if (day < today || (c.marks || {})[day] >= c.perDay) continue;
+      add(d, p, `${c.title}, ${timesText(c.perDay)}`);
+    }
+  }
+  return out.sort((a, b) => a.day.localeCompare(b.day)).slice(0, 400);
+}
+// Отправить план, если он изменился (или наступил новый день и прошлые дни отпали)
+let planBusy = false;
+async function uploadPlan(force) {
+  if (!meta || planBusy) return;
+  const items = pushPlan(), body = JSON.stringify(items);
+  if (!force && body === meta.planSent) return;
+  planBusy = true;
+  try {
+    await api('POST', '/api/push/plan', { items });
+    if (meta) { meta.planSent = body; persist(); }
+  } catch (e) { /* отправим при следующей синхронизации */ }
+  finally { planBusy = false; }
+}
+
+// История отправленных напоминаний (общая на семью). Забираем после синхронизации, не чаще раза в 10 минут.
+let logBusy = false;
+async function fetchLog(force) {
+  if (!meta || logBusy || (!force && Date.now() - (meta.logAt || 0) < 600e3)) return;
+  logBusy = true;
+  try {
+    const r = await api('GET', '/api/push/log');
+    if (!meta) return;
+    const was = JSON.stringify(meta.pushLog || []);
+    meta.pushLog = Array.isArray(r.log) ? r.log.slice(0, 90) : [];
+    meta.logAt = Date.now();
+    persist();
+    if (JSON.stringify(meta.pushLog) !== was) safeRender();
+  } catch (e) { /* покажем то, что сохранено */ }
+  finally { logBusy = false; }
+}
+const lastLogAt = () => (meta && meta.pushLog && meta.pushLog.length ? Math.max(...meta.pushLog.map(l => l.sentAt || 0)) : 0);
+const hasNewLog = () => !!meta && lastLogAt() > (meta.logSeen || 0);
+
+const b64uBytes = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+async function enablePush(hour) {
+  // Разрешение спрашиваем первым делом: iPhone показывает окно, только пока идёт нажатие на кнопку
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { render(); toast(perm === 'denied' ? 'Уведомления запрещены. Их можно разрешить в настройках телефона.' : 'Уведомления не включены'); return; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { key } = await api('GET', '/api/push/key', null, null);
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(key) });
+    }
+    await api('POST', '/api/push/subscribe', { ...sub.toJSON(), hour, tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
+    meta.push = { hour }; persist();
+    uploadPlan(true);
+    render();
+    toast(`Готово! Напоминания будут приходить в ${hour}:00`);
+  } catch (e) {
+    toast(e.status === 0 ? 'Нет связи с сервером. Попробуйте, когда появится интернет.' : 'Не получилось включить напоминания. Попробуйте ещё раз.');
+  }
+}
+async function disablePush() {
+  try {
+    await api('POST', '/api/push/unsubscribe');
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) await sub.unsubscribe();
+  } catch (e) {
+    if (e.status === 0) { toast('Нет связи с сервером. Попробуйте, когда появится интернет.'); return; }
+  }
+  if (meta) { delete meta.push; persist(); }
+  render(); toast('Напоминания выключены');
+}
+
+// Первый заход с телефона в браузере: сразу предлагаем добавить на экран «Домой»
+function offerInstall() {
+  if (isStandalone() || !(isIOS || isAndroid) || window.top !== window) return;
+  let seen = false;
+  try { seen = localStorage.getItem(INSTALL_KEY) === '1'; } catch (e) { /* покажем */ }
+  if (seen) return;
+  sheet = { kind: 'install' };
+  renderSheet();
+}
+function installSheet() {
+  const share = '<svg class="ico-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>';
+  const addIco = '<svg class="ico-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8v8M8 12h8"/></svg>';
+  const steps = isIOS
+    ? [`Нажмите «Поделиться» ${share} — внизу экрана в Safari (на iPad — вверху)`, `Прокрутите список и выберите «На экран „Домой“» ${addIco}`, 'Нажмите «Добавить» и откройте Хвостик с экрана «Домой»']
+    : ['Откройте меню браузера ⋮ — справа вверху', 'Выберите «Установить приложение» или «Добавить на главный экран»', 'Откройте Хвостик с главного экрана'];
+  const why = isIOS
+    ? 'Иначе уведомления о прививках, обработках и лекарствах приходить не будут: iPhone присылает их только приложениям с экрана «Домой».'
+    : 'Так Хвостик откроется как обычное приложение и сможет присылать уведомления о прививках, обработках и лекарствах.';
+  const moved = db.pets.length && !db.demo
+    ? '<p class="para small">Записи, которые вы уже сделали здесь, в приложении появятся не сами: в разделе «Семья» нажмите «Пригласить» и введите код в приложении — «У меня есть приглашение от семьи».</p>'
+    : '<p class="para small">Лучше сделать это сейчас, до того как добавлять питомцев: приложение на экране хранит записи отдельно от браузера.</p>';
+  return `<div class="scrim" data-act="install-ok"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sh-title">
+    <div class="grip"></div><h3 id="sh-title">Добавьте Хвостик на экран «Домой»</h3>
+    <p class="para">${why}</p>
+    <ol class="steps">${steps.map(s => `<li><span>${s}</span></li>`).join('')}</ol>
+    ${isStandalone() ? '' : moved}
+    <div class="actions">${installPrompt ? '<button type="button" class="btn-light" data-act="install-ok">Позже</button><button type="button" class="btn-primary" data-act="install-native">Установить</button>' : '<button type="button" class="btn-primary" data-act="install-ok">Понятно</button>'}</div>
+  </div></div>`;
+}
+
+// Карточка «Напоминания» в настройках
+function pushCard() {
+  const head = '<span class="title">Напоминания</span>';
+  const hours = h => Array.from({ length: 24 }, (_, i) => `<option value="${i}" ${i === h ? 'selected' : ''}>${i}:00</option>`).join('');
+  if (isIOS && !isStandalone()) return `<section class="card pad stack">${head}
+    <p class="para small">На iPhone уведомления приходят, только если Хвостик добавлен на экран «Домой» и открыт оттуда.</p>
+    <div class="row-btns"><button class="btn-dark" data-act="install-help">Как добавить</button></div></section>`;
+  if (!pushSupported()) return `<section class="card pad stack">${head}<p class="para small">Этот браузер не умеет присылать уведомления. На iPhone нужна iOS 16.4 или новее.</p></section>`;
+  if (!meta) return `<section class="card pad stack">${head}<p class="para small">${db.demo ? 'На примере напоминания не приходят. ' : ''}Добавьте своего питомца — напоминания приходят из вашего журнала.</p></section>`;
+  if (Notification.permission === 'denied') return `<section class="card pad stack">${head}
+    <p class="para small">Уведомления для Хвостика запрещены. ${isIOS ? 'Разрешите их на iPhone: «Настройки» → «Уведомления» → «Хвостик».' : 'Разрешите их в настройках браузера или телефона для этого сайта.'}</p></section>`;
+  const on = meta.push && Notification.permission === 'granted';
+  const h = on ? meta.push.hour : 10;
+  return `<section class="card pad stack">${head}
+    <p class="para small">${on ? 'Включены на этом устройстве.' : 'Пришлём уведомление накануне срока, в день срока и, если не отметили, через 3 дня и через неделю. Во время курса лекарств — каждый день.'}</p>
+    <div class="field"><label for="push-hour">Во сколько присылать</label><select id="push-hour">${hours(h)}</select></div>
+    <div class="row-btns">${on
+      ? '<button class="btn-light outline" data-act="push-test">Прислать пробное</button><button class="btn-light outline" data-act="push-off">Выключить</button>'
+      : '<button class="btn-dark" data-act="push-on">Включить напоминания</button>'}</div>
+  </section>`;
+}
+
 // Перерисовать, только если человек сейчас ничего не заполняет
 function safeRender() {
   const r = currentRoute();
@@ -358,7 +537,9 @@ function upcoming({ pet, type } = {}) {
   }
   return [...latest.values()].filter(r => hasRep(r) || r.nextDate).map(r => {
     const last = parseIso(r.date);
-    const planned = r.nextDate ? parseIso(r.nextDate) : nextByRep(last, r);
+    const season = parseSeason(r.season);
+    let planned = r.nextDate ? parseIso(r.nextDate) : nextDue(last, r);
+    if (season && planned < T && !inSeason(T, season)) planned = seasonFrom(T, season);
     const snoozed = r.snooze ? parseIso(r.snooze) : null;
     const next = snoozed && snoozed > planned ? snoozed : planned;
     const d = diffDays(next, T);
@@ -376,6 +557,7 @@ const personAvatar = (name, size, mine) => `<span class="avatar" style="backgrou
 // Срок крупной цифрой: «12 дн.», просрочка со знаком минус
 const numHtml = (d, cls = '') => `<span class="num ${cls}">${d < 0 ? '−' + -d : d}<small> дн.</small></span>`;
 const ICONS = {
+  bell: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></svg>',
   check: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   back: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
   edit: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4-1 11-11-3-3L5 16z"/></svg>',
@@ -386,7 +568,9 @@ const ICONS = {
   chev: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>',
   camera: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>'
 };
-const syncLine = () => (meta ? `<span class="sync" data-sync-status data-state="${syncStatus}">${esc(syncText())}</span>` : '');
+// Надпись о сохранении видна только при проблеме (нет связи, сервер не ответил): когда всё сохранено, она не нужна — решение владельца
+const syncProblem = () => syncStatus === 'offline' || syncStatus === 'error';
+const syncLine = () => (meta ? `<span class="sync" data-sync-status data-state="${syncStatus}" ${syncProblem() ? '' : 'hidden'}>${esc(syncText())}</span>` : '');
 
 const deltaText = ws => {
   if (ws.length < 2) return ws.length ? 'для графика нужно ещё одно взвешивание' : 'вес ещё не записан';
@@ -488,7 +672,9 @@ function petCard(p) {
   // Метки: аллергия, последний визит к врачу, повторный приём, стерилизация
   const visits = db.records.filter(r => r.pet === p.id && r.type === 'visit').sort((a, b) => b.date.localeCompare(a.date));
   const lastVisit = visits[0];
-  const short = lastVisit && lastVisit.concl ? lastVisit.concl.split(/[.,;\n]/)[0].trim().slice(0, 20) : '';
+  // первая фраза заключения; длинную обрезаем по целому слову, а не посреди него
+  const clause = lastVisit && lastVisit.concl ? lastVisit.concl.split(/[.,;\n]/)[0].trim() : '';
+  const short = clause.length <= 24 ? clause : clause.slice(0, 24).replace(/\s+\S*$/, '') + '…';
   const tags = [
     p.allergy ? `<span class="tag-b warn">Аллергия: ${esc(p.allergy.slice(0, 30))}</span>` : '',
     lastVisit ? `<span class="tag-b">Врач: ${fmt(parseIso(lastVisit.date))}${short ? ', ' + esc(short.charAt(0).toLowerCase() + short.slice(1)) : ''}</span>` : '',
@@ -508,8 +694,9 @@ function viewFeed() {
   if (!db.pets.length) return viewWelcome();
   const hot = upcoming().filter(u => u.status === 'hot').length;
   return `${db.demo ? '<div class="banner"><span>Это пример с Рексом, Муркой и Бубликом. Он не сохраняется на сервере.</span><button class="btn-light outline" style="height:38px" data-act="clear-demo">Убрать пример</button></div>' : ""}
-    <header class="head"><div class="top"><span class="eyebrow">${WD[T.getDay()]}, ${fmtFull(T)}</span><h1 class="h1">Мои питомцы</h1>${syncLine()}</div>
-      <span class="count">${hot ? `${hot} ${plural(hot, "просрочено", "просрочено", "просрочено")}` : "Всё вовремя"}</span></header>
+    <header class="head feed-head"><div class="top"><span class="eyebrow">${WD[T.getDay()]}, ${fmtFull(T)}</span><h1 class="h1">Мои питомцы</h1>${syncLine()}</div>
+      ${hot ? `<span class="count">${hot} просрочено</span>` : ""}
+      <a class="round bell" href="#/notifications" aria-label="${hasNewLog() ? 'Уведомления, есть новые' : 'Уведомления'}">${ICONS.bell}${hasNewLog() ? '<span class="dot" aria-hidden="true"></span>' : ''}</a></header>
     ${setupCard()}
     <div class="pet-list">${db.pets.map(petCard).join("")}</div>
     <a class="add-more" href="#/pets/new"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Новый питомец</a>`;
@@ -539,7 +726,7 @@ function histRow(r) {
   const meta = r.type === 'course'
     ? [timesText(r.perDay), r.note, `${r.days} дн.`, `полностью отмечено ${courseInfo(r).fullDays} из ${r.days}`, r.stopped ? 'закончен ' + fmtFull(parseIso(r.stopped)) : ''].filter(Boolean).join(' · ')
     : [r.note, r.cost ? money(r.cost) : '', hasRep(r) ? everyRec(r) : r.nextDate ? 'повторный приём ' + fmtFull(parseIso(r.nextDate)) : 'без напоминания', r.by ? 'отметил(а) ' + r.by : ''].filter(Boolean).join(' · ');
-  const head = `<span class="grow" style="gap:0"><span class="title">${esc(r.title)}</span><span class="small">${esc(meta)}</span></span><span class="row-btns" style="align-items:center;flex-wrap:nowrap"><span class="small">${fmtFull(parseIso(r.date))}</span><button class="btn-icon plain" data-act="del-record" data-id="${r.id}" aria-label="Удалить запись ${esc(r.title)} от ${fmtFull(parseIso(r.date))}">${ICONS.trash}</button></span>`;
+  const head = `<span class="grow" style="gap:0"><span class="title">${esc(r.title)}</span><span class="small">${esc(meta)}</span></span><span class="row-btns" style="align-items:center;flex-wrap:nowrap"><span class="small">${fmtFull(parseIso(r.date))}</span>${canEditRep(r) ? `<button class="btn-icon plain" data-act="edit-rep" data-id="${r.id}" aria-label="Изменить напоминание: ${esc(r.title)}" title="Изменить напоминание">${ICONS.bell}</button>` : ''}<button class="btn-icon plain" data-act="del-record" data-id="${r.id}" aria-label="Удалить запись ${esc(r.title)} от ${fmtFull(parseIso(r.date))}">${ICONS.trash}</button></span>`;
   if (!r.concl && !r.meds) return `<div class="line">${head}</div>`;
   const hint = `<span class="pill" style="align-self:flex-start;margin-top:4px">Заключение — нажмите, чтобы открыть</span>`;
   return `<details class="line hist-more"><summary>${head.replace('</span></span><span class="row-btns"', `</span>${hint}</span><span class="row-btns"`)}</summary>
@@ -547,16 +734,8 @@ function histRow(r) {
     ${r.meds ? `<div class="doc"><span class="lbl">Назначения</span><p class="para pre">${esc(r.meds)}</p></div>` : ''}</details>`;
 }
 
-// Паспортные данные питомца и расходы на него за год
+// Расходы на питомца за год
 const yearSpent = (pet, y = T.getFullYear()) => db.records.filter(r => r.cost && (!pet || r.pet === pet) && r.date.startsWith(y + '-')).reduce((a, r) => a + r.cost, 0);
-function petInfo(p) {
-  const rows = [['Чип', p.chip], ['Стерилизация', STERILE[p.sterile]], ['Особенности и аллергии', p.allergy]].filter(x => x[1]);
-  const spent = yearSpent(p.id);
-  if (spent) rows.push(['Расходы в ' + T.getFullYear(), money(spent)]);
-  const hasPassport = p.chip || p.sterile || p.allergy;
-  return `${rows.length ? `<div class="card list">${rows.map(([k, v]) => `<div class="line"><span class="small">${k}</span><span class="title" style="text-align:right">${esc(v)}</span></div>`).join('')}</div>` : ''}
-    ${hasPassport ? '' : `<a class="add-more" href="#/pet/${p.id}/edit">Добавить чип, стерилизацию, аллергии</a>`}`;
-}
 
 // Подписи месяцев под графиком: не больше шести, повторы месяца не пишем, первая и последняя видны всегда
 function monthLabels(shown) {
@@ -589,11 +768,160 @@ function weightChart(ws, p) {
   </div>`;
 }
 
+// ---------- Экран питомца ----------
+// Сверху вниз: что важно сейчас → плитки разделов → записи по разделам → год → паспорт → лента событий.
+// Состояние экрана: раздел записей (seg), год календаря, фильтр и длина ленты — сбрасываются при переходе к другому питомцу.
+const pv = { pet: null, year: 0, filter: 'all', limit: 12, histAll: false };
+const petState = p => {
+  const list = upcoming({ pet: p.id }), courses = activeCourses(p.id);
+  return { list, courses, status: list.some(u => u.status === 'hot') ? 'hot' : courses.length ? 'treat' : 'ok' };
+};
+const daysNum = d => (d < 0 ? '−' + -d : String(d));
+
+// День рождения в ближайшие две недели: «через 5 дней исполнится 2 года»
+function birthdaySoon(p) {
+  if (!p.birth) return null;
+  const b = parseIso(p.birth);
+  let years = T.getFullYear() - b.getFullYear(), next = addMonths(b, years * 12);
+  if (next < T) { years++; next = addMonths(b, years * 12); }
+  const days = diffDays(next, T);
+  return years > 0 && days <= 14 ? { days, years, date: next } : null;
+}
+
+// Полоска сезона за год: вне сезона / сделано / пропущено / сейчас / впереди
+function monthCells(p, r, year) {
+  const season = parseSeason(r.season), now = T.getFullYear() * 12 + T.getMonth();
+  const done = new Set(db.records.filter(x => x.pet === p.id && x.type === r.type && x.title.toLowerCase() === r.title.toLowerCase() && x.date.startsWith(year + '-')).map(x => Number(x.date.slice(5, 7)) - 1));
+  return Array.from({ length: 12 }, (_, m) => {
+    const at = year * 12 + m, d = new Date(year, m, 15, 12);
+    if (done.has(m)) return 'done';
+    if (season && !inSeason(d, season)) return 'off';
+    if (at === now && season) return 'now'; // сезонное дело в этом месяце ещё не отмечено
+    return season ? (at < now ? 'miss' : 'fut') : '';
+  });
+}
+const strip = (cells, label) => `<div class="mstrip" role="img" aria-label="${esc(label)}">${cells.map(c => `<i class="${c}"></i>`).join('')}</div>`;
+
+// Плитка раздела: ближайшее дело раздела крупной цифрой, сезон или «сколько прошло»
+function sectionTile(p, type, st) {
+  const t = TYPES[type], u = st.list.find(x => x.type === type);
+  const count = db.records.filter(r => r.pet === p.id && r.type === type).length;
+  const hot = u && u.status === 'hot';
+  let body;
+  if (u) {
+    const season = parseSeason(u.season);
+    body = `<span class="pv-big">${daysNum(u.d)}<small> дн.</small></span>
+      <span class="small">${esc(u.title)} · ${u.d < 0 ? 'было ' : ''}${fmt(u.next)}</span>
+      ${season ? strip(monthCells(p, u, T.getFullYear()), `${u.title}: ${seasonText(u.season)}`) : `<div class="pv-bar"><i style="width:${Math.round(u.pct * 100)}%"></i></div>`}`;
+  } else {
+    body = `<span class="pv-mid">${count ? 'Без напоминаний' : 'Записей нет'}</span><span class="small">${count ? `${count} ${plural(count, 'запись', 'записи', 'записей')}` : 'Нажмите, чтобы добавить'}</span>`;
+  }
+  return `<button type="button" class="pv-tile${hot ? ' hot-tile' : ''}${hot && type === 'treatment' ? ' wide' : ''}" data-act="goto-seg" data-v="${type}">
+    <span class="pv-tl">${t.tab}${hot ? '<span class="pv-flag">просрочено</span>' : ''}</span>${body}</button>`;
+}
+function petTiles(p, st, ws) {
+  const visits = db.records.filter(r => r.pet === p.id && r.type === 'visit').sort((a, b) => b.date.localeCompare(a.date));
+  const v = visits[0], c = st.courses[0], ci = c && courseInfo(c), w = ws.at(-1), spent = yearSpent(p.id);
+  const people = meta && meta.members.length > 1 ? meta.members.map(m => m.name) : [];
+  const visitTile = `<button type="button" class="pv-tile" data-act="goto-seg" data-v="visit"><span class="pv-tl">Врач</span>
+    ${v ? `<span class="pv-mid">${fmtFull(parseIso(v.date))}</span><span class="small">${esc(v.title)}${v.nextDate && parseIso(v.nextDate) > T ? ' · повторно ' + fmt(parseIso(v.nextDate)) : ''}</span>` : '<span class="pv-mid">Визитов нет</span><span class="small">Можно отсканировать заключение</span>'}</button>`;
+  const courseTile = `<button type="button" class="pv-tile${c ? ' treat-tile' : ''}" data-act="goto-seg" data-v="course"><span class="pv-tl">Лекарства</span>
+    ${c ? `<span class="pv-big">${ci.dayNo}<small> из ${c.days}</small></span><span class="small">${esc(c.title)} · сегодня ${ci.today} из ${c.perDay}</span>` : '<span class="pv-mid">Курсов нет</span><span class="small">Назначит врач — добавьте курс</span>'}</button>`;
+  const weightTile = `<button type="button" class="pv-tile" data-act="goto-seg" data-v="weight"><span class="pv-tl">Вес</span>
+    ${w ? `<span class="pv-big">${kg(w.kg)}<small> кг</small></span><span class="small">${ws.length > 1 ? esc(deltaText(ws)) : 'взвешивайте раз в месяц — будет график'}</span>` : '<span class="pv-mid">Не записан</span><span class="small">Нажмите, чтобы записать</span>'}</button>`;
+  return `<h2 class="h2">Разделы</h2><div class="pv-tiles">
+    ${sectionTile(p, 'treatment', st)}${sectionTile(p, 'vaccine', st)}${visitTile}${courseTile}${sectionTile(p, 'groom', st)}${weightTile}
+    <a class="pv-tile" href="#/settings"><span class="pv-tl">Расходы в ${T.getFullYear()}</span><span class="pv-mid">${spent ? money(spent) : 'Не указаны'}</span><span class="small">${spent ? 'по записям с ценой' : 'укажите цену в записи'}</span></a>
+    ${people.length ? `<a class="pv-tile" href="#/family"><span class="pv-tl">Кто ухаживает</span><span class="pv-people">${people.slice(0, 4).map(n => `<span class="avatar" style="background:var(--divider);width:32px;height:32px;font-size:13px" aria-hidden="true">${esc(n[0].toUpperCase())}</span>`).join('')}</span><span class="small">${esc(people.join(', '))}</span></a>` : ''}
+  </div>`;
+}
+
+// Год питомца: строка на каждое дело (обработки, прививки, уход) и на врача и вес; клеточка — месяц
+function petYear(p, year) {
+  const yearsWith = new Set([T.getFullYear(), ...db.records.filter(r => r.pet === p.id).map(r => Number(r.date.slice(0, 4))), ...petWeights(p.id).map(w => Number(w.date.slice(0, 4)))]);
+  const years = [...yearsWith].sort((a, b) => b - a).slice(0, 3);
+  const latest = new Map();
+  for (const r of db.records) {
+    if (r.pet !== p.id || !['treatment', 'vaccine', 'groom'].includes(r.type)) continue;
+    const k = r.type + '|' + r.title.toLowerCase(), cur = latest.get(k);
+    if (!cur || r.date > cur.date) latest.set(k, r);
+  }
+  const ups = upcoming({ pet: p.id });
+  const rows = [];
+  for (const r of latest.values()) {
+    const cells = monthCells(p, r, year);
+    const u = ups.find(x => x.id === r.id);
+    if (u && u.next.getFullYear() === year && u.d > 0 && cells[u.next.getMonth()] !== 'done') cells[u.next.getMonth()] = 'plan';
+    if (cells.some(c => c === 'done' || c === 'plan')) rows.push({ title: r.title, cells, season: parseSeason(r.season) });
+  }
+  const monthsOf = list => { const s = new Set(list.filter(d => d.startsWith(year + '-')).map(d => Number(d.slice(5, 7)) - 1)); return Array.from({ length: 12 }, (_, m) => (s.has(m) ? 'done' : '')); };
+  const visitCells = monthsOf(db.records.filter(r => r.pet === p.id && r.type === 'visit').map(r => r.date));
+  const weightCells = monthsOf(petWeights(p.id).map(w => w.date));
+  if (visitCells.includes('done')) rows.push({ title: 'Врач', cells: visitCells });
+  if (weightCells.includes('done')) rows.push({ title: 'Вес', cells: weightCells });
+  const cur = year === T.getFullYear() ? T.getMonth() : -1;
+  const sum = rows.map(r => {
+    const n = r.cells.filter(c => c === 'done').length;
+    const of = r.season ? r.cells.filter((c, m) => c !== 'off' && (year < T.getFullYear() || m <= T.getMonth())).length : 0;
+    return `<div class="line"><span>${esc(r.title)}</span><span class="title">${r.season ? `${n} из ${of} мес. сезона` : `${n} ${plural(n, 'месяц', 'месяца', 'месяцев')}`}</span></div>`;
+  }).join('');
+  const missed = rows.filter(r => r.season).map(r => ({ title: r.title, months: r.cells.map((c, m) => (c === 'miss' ? m : -1)).filter(m => m >= 0) })).filter(x => x.months.length);
+  return `<h2 class="h2">Год питомца</h2>
+    ${years.length > 1 ? `<div class="seg pv-years" role="group" aria-label="Год">${years.slice().reverse().map(y => `<button type="button" data-act="pv-year" data-v="${y}" aria-pressed="${y === year}">${y}</button>`).join('')}</div>` : ''}
+    <div class="card pad pv-year">
+      ${rows.length ? `<div class="pv-grid pv-mon"><span></span>${MON1.map((m, i) => `<span class="${i === cur ? 'cur' : ''}">${m[0]}</span>`).join('')}</div>
+      ${rows.map(r => `<div class="pv-grid"><span class="pv-rt">${esc(r.title)}</span>${r.cells.map(c => `<i class="${c}"></i>`).join('')}</div>`).join('')}
+      <div class="pv-legend"><span><i class="done"></i>сделано</span><span><i class="miss"></i>сезон, не отмечено</span><span><i class="now"></i>пора в этом месяце</span><span><i class="plan"></i>впереди</span><span><i class="off"></i>не сезон</span></div>`
+      : `<span class="small">В ${year} году записей нет.</span>`}
+    </div>
+    ${sum ? `<div class="card list">${sum}</div>` : ''}
+    ${missed.length && year === T.getFullYear() ? `<div class="pv-miss"><span class="title">${missed.map(x => `${esc(x.title)}: не отмечены ${x.months.map(m => MONN[m]).join(', ')}`).join('. ')}</span>
+      <span class="small">Если делали, но не записали, добавьте запись с той датой — срок пересчитается.</span>
+      <button class="btn-dark" data-act="add" data-type="treatment" data-pet="${p.id}">Добавить запись</button></div>` : ''}`;
+}
+
+// Паспорт: зелёная карточка
+function petPassport(p) {
+  const rows = [['Чип', p.chip], ['Дата рождения', p.birth ? `${parseIso(p.birth).getDate()} ${MONF[parseIso(p.birth).getMonth()]} ${p.birth.slice(0, 4)}` : ''], ['Стерилизация', STERILE[p.sterile]], ['Особенности и аллергии', p.allergy]];
+  const empty = rows.filter(r => !r[1]).length;
+  return `<h2 class="h2">Паспорт</h2><a class="passport pv-pass" href="#/pet/${p.id}/edit">
+    ${rows.map(([k, v]) => `<div class="pv-pline"><span class="psub">${k}</span><span class="${v ? 'title' : 'psub'}">${v ? esc(v) : 'не указано'}</span></div>`).join('')}
+    ${empty ? '<span class="psub">Нажмите, чтобы дополнить</span>' : ''}</a>`;
+}
+
+// Лента событий: впереди — ближайшие сроки, дальше всё, что было, по месяцам
+function petFeed(p, st) {
+  const f = pv.filter;
+  const has = { treatment: 0, vaccine: 0, visit: 0, groom: 0, course: 0, weight: 0 };
+  db.records.forEach(r => { if (r.pet === p.id) has[r.type]++; });
+  has.weight = petWeights(p.id).length;
+  const chips = [['all', 'Всё'], ...Object.entries(TYPES).map(([k, t]) => [k, t.tab]), ['weight', 'Вес']].filter(([k]) => k === 'all' || has[k]);
+  const past = [
+    ...db.records.filter(r => r.pet === p.id && (f === 'all' || r.type === f)).map(r => ({ date: r.date, title: r.type === 'course' ? `Курс: ${r.title}` : r.title, sub: [r.type === 'course' ? `${r.days} ${dayWord(r.days)}, ${timesText(r.perDay)}` : r.note, r.by ? 'отметил(а) ' + r.by : ''].filter(Boolean).join(' · '), kind: r.type })),
+    ...(f === 'all' || f === 'weight' ? petWeights(p.id).map(w => ({ date: w.date, title: `Вес ${kg(w.kg)} кг`, sub: '', kind: 'weight' })) : [])
+  ].sort((a, b) => b.date.localeCompare(a.date));
+  const ahead = st.list.filter(u => u.d > 0 && (f === 'all' || u.type === f)).slice(0, 3);
+  const shown = past.slice(0, pv.limit);
+  let lastMonth = '';
+  const rows = shown.map(e => {
+    const d = parseIso(e.date), m = `${MONN[d.getMonth()][0].toUpperCase()}${MONN[d.getMonth()].slice(1)} ${d.getFullYear()}`;
+    const head = m !== lastMonth ? `<span class="pv-fm">${m}</span>` : '';
+    lastMonth = m;
+    return `${head}<div class="pv-fe"><i class="k-${e.kind}"></i><span class="grow" style="gap:0"><span class="title">${esc(e.title)}</span>${e.sub ? `<span class="small">${esc(e.sub)}</span>` : ''}</span><span class="small">${d.getDate()}</span></div>`;
+  }).join('');
+  return `<h2 class="h2">Лента событий</h2>
+    <div class="chips pv-chips">${chips.map(([k, l]) => `<button type="button" class="chip${f === k ? ' on' : ''}" data-act="pv-filter" data-v="${k}" aria-pressed="${f === k}">${l}</button>`).join('')}</div>
+    ${ahead.length ? `<div class="card list">${ahead.map(u => `<div class="line"><span class="grow" style="gap:0"><span class="title">${esc(u.title)}</span><span class="small">через ${u.d} ${dayWord(u.d)}</span></span><span class="small">${fmtFull(u.next)}</span></div>`).join('')}</div>` : ''}
+    ${shown.length ? `<div class="card pad pv-feed">${rows}</div>` : '<div class="card list"><div class="empty">Записей пока нет.</div></div>'}
+    ${past.length > shown.length ? `<button class="btn-wide" data-act="pv-more">Показать раньше: ещё ${past.length - shown.length}</button>` : ''}`;
+}
+
 function viewPet(id) {
   const p = petById(id);
   if (!p) return viewMissing();
   if (state.segPet !== id) { state.seg = 'treatment'; state.segPet = id; }
-  const ws = petWeights(p.id);
+  if (pv.pet !== id) Object.assign(pv, { pet: id, year: T.getFullYear(), filter: 'all', limit: 12, histAll: false });
+  const ws = petWeights(p.id), st = petState(p);
   const segBtn = (v, label) => `<button data-act="seg" data-v="${v}" aria-pressed="${state.seg === v}">${label}</button>`;
   let body;
   if (state.seg === 'course') {
@@ -602,17 +930,16 @@ function viewPet(id) {
       ${done.length ? `<h2 class="h2">Прошлые курсы</h2><div class="card list">${done.map(histRow).join('')}</div>` : ''}
       <button class="btn-wide" data-act="add" data-type="course" data-pet="${p.id}">Добавить курс лекарств</button>`;
   } else if (state.seg === 'weight') {
-    body = `${ws.length ? `<div class="card list">${ws.slice().reverse().map(w => `<div class="line"><span class="title">${kg(w.kg)} кг</span><span class="row-btns" style="align-items:center"><span class="small">${fmtFull(parseIso(w.date))}</span><button class="btn-icon plain" data-act="del-weight" data-id="${w.id}" aria-label="Удалить взвешивание ${kg(w.kg)} кг">${ICONS.trash}</button></span></div>`).join('')}</div>` : ''}
+    body = `${weightChart(ws, p)}
+      ${ws.length ? `<div class="card list">${ws.slice().reverse().map(w => `<div class="line"><span class="title">${kg(w.kg)} кг</span><span class="row-btns" style="align-items:center"><span class="small">${fmtFull(parseIso(w.date))}</span><button class="btn-icon plain" data-act="del-weight" data-id="${w.id}" aria-label="Удалить взвешивание ${kg(w.kg)} кг">${ICONS.trash}</button></span></div>`).join('')}</div>` : ''}
       <button class="btn-wide" data-act="add" data-type="weight" data-pet="${p.id}">Записать вес</button>`;
   } else {
     const next = upcoming({ pet: p.id, type: state.seg });
-    const hot = next.filter(u => u.status === 'hot'), rest = next.filter(u => u.status !== 'hot');
     const hist = db.records.filter(r => r.pet === p.id && r.type === state.seg).sort((a, b) => b.date.localeCompare(a.date) || b.created - a.created);
-    body = `${hot.map(u => hotCard(u, false)).join('')}
-      ${rest.length ? `<div class="nums">${rest.map(u => itemRow(u, false)).join('')}</div>` : ''}
-      ${!next.length ? '<div class="card list"><div class="empty">Ничего не запланировано.</div></div>' : ''}
+    body = `${next.length ? `<div class="nums">${next.map(u => itemRow(u, false)).join('')}</div>` : '<div class="card list"><div class="empty">Ничего не запланировано.</div></div>'}
       ${hist.length ? `<h2 class="h2">История</h2>
-      <div class="card list">${hist.map(histRow).join('')}</div>` : ''}
+      <div class="card list">${(pv.histAll ? hist : hist.slice(0, 5)).map(histRow).join('')}</div>
+      ${!pv.histAll && hist.length > 5 ? `<button class="btn-wide" data-act="pv-hist">Показать всю историю: ещё ${hist.length - 5}</button>` : ''}` : ''}
       <button class="btn-wide" data-act="add" data-type="${state.seg}" data-pet="${p.id}">Добавить ${TYPES[state.seg].acc}</button>`;
   }
   const segAnim = state.segAnim; state.segAnim = false; // анимация раздела — только сразу после переключения
@@ -621,16 +948,31 @@ function viewPet(id) {
   // «4 года 5 мес»: годы крупно, месяцы мелко рядом
   const ageM = /^(\d+ \S+)( .+)?$/.exec(age(p.birth));
   const ageHtml = ageM ? `<span class="nw">${esc(ageM[1])}</span>${ageM[2] ? `<small>${esc(ageM[2])}</small>` : ''}` : esc(age(p.birth) || '—');
+  const bd = birthdaySoon(p);
+  const first = st.list[0], c = st.courses[0];
+  const main = first && first.d <= 0 ? { label: first.d < 0 ? 'Просрочено' : 'Срок', val: first.d < 0 ? `${-first.d}<small> дн.</small>` : 'сегодня', dark: true }
+    : c ? { label: 'Курс', val: `${courseInfo(c).dayNo}<small> из ${c.days}</small>` }
+    : first ? { label: 'До ближайшего', val: `${first.d}<small> дн.</small>` } : { label: 'Ближайшее', val: '—' };
+  const hot = st.list.filter(u => u.status === 'hot'), soon = st.list.filter(u => u.status !== 'hot').slice(0, 4);
   return `<div class="head"><a class="round" href="#/" aria-label="Назад на главную">${ICONS.back}</a><a class="round" href="#/pet/${p.id}/edit" aria-label="Изменить данные питомца">${ICONS.edit}</a></div>
-    <header class="pet-head">${avatar(p, 80)}<div class="top"><h1 class="h1 big">${esc(p.name)}</h1><span class="eyebrow">${esc(metaLine)}</span></div></header>
-    <div class="stats">
+    <header class="pet-head">${avatar(p, 80)}<div class="top">${st.status === "ok" ? "" : `<span class="pv-status s-${st.status}">${STATUS[st.status]}</span>`}<h1 class="h1 big">${esc(p.name)}</h1><span class="eyebrow">${esc(metaLine)}</span></div></header>
+    ${bd ? `<div class="pv-bday"><span class="pv-bday-n">${bd.years}</span><span class="grow" style="gap:0"><span class="title">${bd.days === 0 ? `Сегодня день рождения — ${bd.years} ${plural(bd.years, 'год', 'года', 'лет')}!` : `Через ${bd.days} ${dayWord(bd.days)} исполнится ${bd.years} ${plural(bd.years, 'год', 'года', 'лет')}`}</span><span class="small">День рождения ${fmtFull(bd.date)}</span></span></div>` : ''}
+    <div class="stats three">
       <div class="stat"><span class="small">Возраст</span><span class="num">${ageHtml}</span></div>
       <div class="stat"><span class="small">Вес</span><span class="num">${lastW ? `${kg(lastW.kg)}<small> кг</small>` : '—'}</span></div>
+      <div class="stat${main.dark ? ' dark' : ''}"><span class="small">${main.label}</span><span class="num">${main.val}</span></div>
     </div>
-    ${weightChart(ws, p)}
-    ${petInfo(p)}
+    <h2 class="h2">Что дальше</h2>
+    ${hot.map(u => hotCard(u, false)).join('')}
+    ${soon.length ? `<div class="nums">${soon.map(u => itemRow(u, false)).join('')}</div>` : ''}
+    ${!st.list.length ? '<div class="card list"><div class="empty">Ничего не запланировано. Добавьте обработку или прививку — Хвостик напомнит.</div></div>' : ''}
+    ${petTiles(p, st, ws)}
+    <h2 class="h2" id="pv-records">Записи</h2>
     <div class="typepick" role="group" aria-label="Раздел">${Object.entries(TYPES).map(([k, t]) => segBtn(k, t.tab)).join('')}${segBtn('weight', 'Вес')}</div>
     <div class="seg-body${segAnim ? ' in-fade' : ''}">${body}</div>
+    ${petYear(p, pv.year)}
+    ${petPassport(p)}
+    ${petFeed(p, st)}
     <p class="note">Сроки указываете вы, по совету врача или инструкции препарата. Хвостик напоминает, но не заменяет ветеринара.</p>`;
 }
 
@@ -1113,13 +1455,53 @@ function viewSettings() {
       <p class="para small">${where}</p>
       <div class="row-btns"><button class="btn-dark" data-act="export" ${db.pets.length ? '' : 'disabled style="opacity:.5"'}>Скачать копию</button><button class="btn-light outline" data-act="import">Загрузить из файла</button></div>
     </section>
+    ${pushCard()}
     ${spendCard()}
-    <section class="passport">
+    ${isStandalone() ? '' : `<section class="passport">
       <span class="title">Установить на телефон</span>
-      <p class="para psub">iPhone: откройте сайт в Safari, нажмите «Поделиться» и выберите «На экран Домой». Android: в меню Chrome выберите «Добавить на главный экран». Хвостик откроется как отдельное приложение и будет работать без интернета.</p>
-    </section>
+      <p class="para psub">iPhone: откройте сайт в Safari, нажмите «Поделиться» и выберите «На экран „Домой“». Android: в меню Chrome выберите «Установить приложение». Хвостик откроется как отдельное приложение, будет работать без интернета и присылать напоминания.</p>
+      ${isIOS || isAndroid ? '<div class="row-btns"><button class="btn-primary" data-act="install-help">Как установить</button></div>' : ''}
+    </section>`}
     <button class="btn-danger" data-act="wipe" ${db.pets.length || meta ? '' : 'disabled style="opacity:.5"'}>${meta ? 'Удалить журнал у всех' : 'Удалить все данные'}</button>
     <p class="note">Хвостик ${APP_VERSION}. Напоминает о сроках, но не заменяет ветеринара.</p>`;
+}
+
+// ---------- Журнал уведомлений ----------
+// «Скоро» — что придёт в ближайшую неделю, если дела не отметить (из плана на этом устройстве);
+// «Пришли» — что сервер действительно отправил семье за 90 дней.
+function dayLabel(day) {
+  const d = parseIso(day), n = diffDays(d, T);
+  const rel = n === 0 ? 'Сегодня' : n === 1 ? 'Завтра' : n === -1 ? 'Вчера' : '';
+  return rel ? `${rel}, ${fmtFull(d)}` : `${WD[d.getDay()]}, ${fmtFull(d)}`;
+}
+function logRows(items) {
+  return items.map(it => {
+    const p = db.pets.find(x => x.name === it.pet);
+    const inner = `${p ? avatar(p, 36) : ''}<span class="grow" style="gap:1px"><span class="title">${esc(it.pet)}</span><span class="small">${esc(it.text)}</span></span>`;
+    return p ? `<a class="nrow nlink" href="#/pet/${p.id}">${inner}</a>` : `<div class="nrow">${inner}</div>`;
+  }).join('');
+}
+function viewNotifications() {
+  const back = `<div class="head"><a class="round" href="#/" aria-label="Назад на главную">${ICONS.back}</a></div><h1 class="h1">Уведомления</h1>`;
+  if (!meta) return `${back}<div class="card pad stack"><p class="para small">${db.demo ? 'На примере уведомления не приходят. ' : ''}Когда вы добавите своего питомца и включите напоминания в настройках, здесь появится всё, что Хвостик присылал.</p></div>`;
+  const on = meta.push && pushSupported() && Notification.permission === 'granted';
+  const week = iso(addDays(T, 7));
+  const log = meta.pushLog || [];
+  // Сегодняшнее уже пришло (или час рассылки прошёл) — оно в «Пришли», а не в «Скоро»
+  const todayGone = log.some(l => l.day === iso(T)) || (on && new Date().getHours() > meta.push.hour + 2);
+  const soon = pushPlan().filter(it => it.day <= week && !(todayGone && it.day === iso(T)));
+  const byDay = list => [...new Set(list.map(it => it.day))].map(day => [day, list.filter(it => it.day === day)]);
+  const time = ms => { const d = new Date(ms); return `${d.getHours()}:${pad(d.getMinutes())}`; };
+  const seen = meta.logSeen || 0;
+  return `${back}
+    ${on ? '' : `<div class="card pad stack"><p class="para small">На этом устройстве напоминания выключены. ${isIOS && !isStandalone() ? 'На iPhone они приходят, только если Хвостик открыт с экрана «Домой».' : 'Включить их можно в настройках.'}</p><div class="row-btns"><a class="btn-dark" href="#/settings">В настройки</a></div></div>`}
+    <h2 class="h2">Скоро</h2>
+    ${soon.length ? byDay(soon).map(([day, items]) => `<section class="card list nlog"><div class="nday">${dayLabel(day)}${on ? ` · в ${meta.push.hour}:00` : ''}</div>${logRows(items)}</section>`).join('')
+      : '<div class="card pad"><p class="para small">В ближайшую неделю напоминать не о чем.</p></div>'}
+    <h2 class="h2">Пришли</h2>
+    ${log.length ? log.map(l => `<section class="card list nlog${l.sentAt > seen ? ' fresh' : ''}"><div class="nday">${dayLabel(l.day)} · в ${time(l.sentAt)}${l.sentAt > seen ? '<span class="new">новое</span>' : ''}</div>${logRows(l.items || [])}</section>`).join('')
+      : '<div class="card pad"><p class="para small">Пока ничего не приходило. Здесь будут все напоминания за последние 90 дней.</p></div>'}
+    <p class="note">Список общий для семьи: уведомление о дне приходит всем, у кого включены напоминания.</p>`;
 }
 
 const viewMissing = () => `<h1 class="h1">Такой страницы нет</h1><div class="card pad stack"><span class="small">Возможно, питомца удалили.</span><div class="row-btns"><a class="btn-dark" href="#/">На главную</a></div></div>`;
@@ -1132,6 +1514,7 @@ function currentRoute() {
   if (parts[0] === 'pets') return { name: 'feed' }; // старый адрес раздела «Питомцы» ведёт на главную
   if (parts[0] === 'pet' && parts[1] && parts[2] === 'edit') return { name: 'pet-edit', id: parts[1] };
   if (parts[0] === 'pet' && parts[1]) return { name: 'pet', id: parts[1] };
+  if (parts[0] === 'notifications') return { name: 'notifications' };
   if (parts[0] === 'family') return { name: 'family', tab: 'family' };
   if (parts[0] === 'join') return { name: 'join', code: decodeURIComponent(parts[1] || ''), tab: 'family' };
   if (parts[0] === 'settings') return { name: 'settings', tab: 'settings' };
@@ -1140,8 +1523,49 @@ function currentRoute() {
 
 const main = document.getElementById('main');
 let lastRouteKey = '', lastDepth = 0;
+
+// Нижнее меню уезжает, когда листают вниз, и возвращается, когда листают вверх (выбор владельца).
+// Всегда видно в самом верху страницы, после перехода на другой экран и при фокусе с клавиатуры.
+// На странице без прокрутки — жест пальцем вверх/вниз или колёсико мыши.
+const navEl = document.querySelector('.nav');
+const navAway = on => navEl.classList.toggle('away', on);
+let navY = window.scrollY, navTick = false, navHold = 0; // navHold: до этого времени не прятать (инерция прокрутки после перехода)
+// На коротких страницах (главная с тремя карточками) прокручивать нечего или почти нечего — там меню прячет жест или колёсико.
+// Прокрутка меньше 120 точек тоже считается короткой: иначе «верх» и «низ» страницы совпадают и меню не уходит никогда.
+const pageFits = () => document.documentElement.scrollHeight - window.innerHeight < 120;
+window.addEventListener('scroll', () => {
+  if (navTick || pageFits()) return; // «пружинка» iOS на короткой странице не должна возвращать меню
+  navTick = true;
+  requestAnimationFrame(() => {
+    navTick = false;
+    // «пружинка» iPhone у краёв страницы не считается прокруткой
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    const y = Math.min(Math.max(window.scrollY, 0), max), dy = y - navY;
+    if (y < 10 || dy < -8) navAway(false);
+    else if (dy > 8 && Date.now() > navHold) navAway(true);
+    if (Math.abs(dy) > 8 || y < 10) navY = y;
+  });
+}, { passive: true });
+let touch0 = null;
+document.addEventListener('touchstart', e => {
+  const t = e.touches[0];
+  touch0 = e.touches.length === 1 && !e.target.closest('#sheet, input, textarea, select') ? { x: t.clientX, y: t.clientY } : null;
+}, { passive: true });
+document.addEventListener('touchmove', e => {
+  if (!touch0 || !pageFits()) return;
+  const t = e.touches[0], dx = t.clientX - touch0.x, dy = t.clientY - touch0.y;
+  if (Math.abs(dy) < 24 || Math.abs(dy) < Math.abs(dx)) return; // короткое касание или жест вбок
+  navAway(dy < 0); // палец вверх — спрятать, вниз — показать
+  touch0 = null;
+}, { passive: true });
+window.addEventListener('wheel', e => {
+  if (!pageFits() || Math.abs(e.deltaY) < 4 || e.target.closest('#sheet')) return;
+  navAway(e.deltaY > 0);
+}, { passive: true });
+navEl.addEventListener('focusin', () => navAway(false));
+
 // Глубина экрана: вглубь (к питомцу) — въезжает справа, назад — слева, между разделами — проявляется
-const DEPTH = { feed: 0, family: 0, settings: 0, missing: 0, join: 1, pet: 1, 'pet-new': 1, 'pet-edit': 2 };
+const DEPTH = { feed: 0, family: 0, settings: 0, missing: 0, join: 1, notifications: 1, pet: 1, 'pet-new': 1, 'pet-edit': 2 };
 function render() {
   const r = currentRoute();
   const html = r.name === 'feed' ? viewFeed()
@@ -1151,9 +1575,12 @@ function render() {
     : r.name === 'family' ? viewFamily()
     : r.name === 'join' ? viewJoin(r.code)
     : r.name === 'settings' ? viewSettings()
+    : r.name === 'notifications' ? viewNotifications()
     : viewMissing();
   main.innerHTML = html;
-  main.classList.toggle('narrow', ['feed', 'pet', 'pet-new', 'pet-edit', 'settings', 'family', 'join'].includes(r.name));
+  // Открыли журнал уведомлений — новые становятся просмотренными (метка «новое» видна до следующего захода)
+  if (r.name === 'notifications' && meta && lastLogAt() > (meta.logSeen || 0)) { meta.logSeen = lastLogAt(); persist(); }
+  main.classList.toggle('narrow', ['feed', 'pet', 'pet-new', 'pet-edit', 'settings', 'family', 'join', 'notifications'].includes(r.name));
   const tab = r.tab || 'feed';
   document.querySelectorAll('.nav [data-route]').forEach(a => {
     if (a.dataset.route === tab) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
@@ -1165,12 +1592,16 @@ function render() {
     main.style.minHeight = ''; // запас высоты от переключения разделов нужен только на одном экране
     if (lastRouteKey) { void main.offsetWidth; main.classList.add(d > lastDepth ? 'in-fwd' : d < lastDepth ? 'in-back' : 'in-fade'); }
     window.scrollTo(0, 0); lastRouteKey = key; lastDepth = d;
+    navAway(false); navY = 0; navHold = Date.now() + 500;
   }
   const overdue = db.pets.length ? upcoming().filter(u => u.status === 'hot').length : 0;
   document.title = overdue ? `(${overdue}) Хвостик` : 'Хвостик';
 }
 // Несохранённое фото не должно «всплывать» при следующем открытии формы
-window.addEventListener('hashchange', () => { closeSheet(); photoDraft = { key: '', value: '' }; render(); main.focus({ preventScroll: true }); });
+window.addEventListener('hashchange', () => {
+  closeSheet(); photoDraft = { key: '', value: '' }; render(); main.focus({ preventScroll: true });
+  if (currentRoute().name === 'notifications') fetchLog(true);
+});
 
 // ---------- Уведомление внизу ----------
 let toastTimer;
@@ -1241,7 +1672,7 @@ function openAdd(type, pet) {
   if (!db.pets.length) { toast('Сначала добавьте питомца'); location.hash = '#/pets/new'; return; }
   const r = currentRoute();
   const t = type || (r.name === 'pet' ? state.seg : 'treatment');
-  sheet = { kind: 'add', type: t, pet: pet || (r.name === 'pet' && petById(r.id) ? r.id : db.pets[0].id), months: TYPES[t] ? TYPES[t].months : 3, rep: TYPES[t] && !TYPES[t].months ? 'none' : 'm', repUnit: 'w', repN: 2, days: 7, perDay: 2, error: '' };
+  sheet = { kind: 'add', type: t, pet: pet || (r.name === 'pet' && petById(r.id) ? r.id : db.pets[0].id), months: TYPES[t] ? TYPES[t].months : 3, rep: TYPES[t] && !TYPES[t].months ? 'none' : 'm', repUnit: 'w', repN: 2, season: false, sFrom: 3, sTo: 11, days: 7, perDay: 2, error: '' };
   sheetHost.innerHTML = '';
   renderSheet();
 }
@@ -1264,6 +1695,21 @@ function renderSheet() {
 }
 function renderSheetBody() {
   if (!sheet) { sheetHost.innerHTML = ''; return; }
+  if (sheet.kind === 'rep') {
+    const r = db.records.find(x => x.id === sheet.id), p = r && petById(r.pet);
+    if (!r || !p) { closeSheet(); return; }
+    const el = document.getElementById('f-rep-n');
+    const repN = el ? el.value : String(sheet.repN || 2);
+    sheetHost.innerHTML = `<div class="scrim" data-act="sheet-cancel"><form class="sheet" id="rep-form" role="dialog" aria-modal="true" aria-labelledby="sh-title" novalidate>
+      <div class="grip"></div>
+      <h3 id="sh-title">Изменить напоминание</h3>
+      <p class="para small">${esc(p.name)} · ${esc(r.title)}${r.note ? ' · ' + esc(r.note) : ''} · последний раз ${fmtFull(parseIso(r.date))}</p>
+      ${repField(repN, repHint(parseIso(r.date), repN))}
+      ${sheet.error ? `<p class="err" role="alert">${esc(sheet.error)}</p>` : ''}
+      <div class="actions"><button type="button" class="btn-light" data-act="sheet-cancel">Отмена</button><button type="submit" class="btn-primary">Сохранить</button></div>
+    </form></div>`;
+    return;
+  }
   if (sheet.kind === 'confirm') {
     sheetHost.innerHTML = `<div class="scrim" data-act="sheet-cancel"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sh-title">
       <div class="grip"></div><h3 id="sh-title">${esc(sheet.title)}</h3><p class="para">${esc(sheet.text)}</p>
@@ -1282,6 +1728,7 @@ function renderSheetBody() {
     </div></div>`;
     return;
   }
+  if (sheet.kind === 'install') { sheetHost.innerHTML = installSheet(); return; }
   if (sheet.kind === 'invite') {
     const link = `${location.origin}/#/join/${sheet.code}`;
     sheetHost.innerHTML = `<div class="scrim" data-act="sheet-cancel"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sh-title">
@@ -1326,10 +1773,7 @@ function renderSheetBody() {
     ${isV ? `<div class="field"><label for="f-concl">Заключение врача</label><textarea id="f-concl" rows="4" maxlength="1500" placeholder="Диагноз, выводы врача">${esc(concl)}</textarea></div>
     <div class="field"><label for="f-meds">Назначения и лекарства</label><textarea id="f-meds" rows="4" maxlength="1500" placeholder="Что, сколько и сколько дней давать">${esc(meds)}</textarea></div>
     <div class="field"><label for="f-next">Повторный приём, если назначен</label><input id="f-next" type="date" min="${iso(addDays(T, 1))}" value="${esc(nextD)}"><span class="small">Хвостик напомнит в этот день.</span></div>` : ''}
-    ${isW || isV || isC ? '' : `<div class="field" role="group" aria-label="Напомнить снова"><span class="lbl" aria-hidden="true">Напомнить снова через</span>
-      <div class="rpick">${[[1, '1', 'месяц'], [3, '3', 'месяца'], [6, '6', 'месяцев'], [12, '1', 'год']].map(([m, n, u]) => `<button type="button" data-act="sheet-months" data-v="${m}" aria-pressed="${sheet.rep === 'm' && sheet.months === m}" aria-label="Через ${n} ${u}"><b>${n}</b><small>${u}</small></button>`).join('')}<button type="button" class="word" data-act="sheet-rep" data-v="custom" aria-pressed="${sheet.rep === 'custom'}">Своё</button><button type="button" class="word" data-act="sheet-rep" data-v="none" aria-pressed="${sheet.rep === 'none'}">Не надо</button></div>
-      ${sheet.rep === 'custom' ? `<div class="rep-custom"><label class="sr" for="f-rep-n">Через сколько</label><input id="f-rep-n" type="number" inputmode="numeric" min="1" max="${REP_MAX[sheet.repUnit]}" value="${esc(repN)}"><div class="seg">${[['d', 'дней'], ['w', 'недель'], ['m', 'месяцев']].map(([u, l]) => `<button type="button" data-act="sheet-unit" data-v="${u}" aria-pressed="${sheet.repUnit === u}">${l}</button>`).join('')}</div></div>` : ''}
-      <span class="small" id="rep-hint">${remind}</span></div>`}
+    ${isW || isV || isC ? '' : repField(repN, remind)}
     ${isW ? '' : `<div class="field"><label for="f-note">${ty.noteLabel || 'Заметка'}</label><input id="f-note" type="text" maxlength="300" autocomplete="off" placeholder="${ty.notePh || 'Препарат, клиника'}" value="${esc(note)}"></div>
     <div class="field"><label for="f-cost">Сколько стоило, ₽ — по желанию</label><input id="f-cost" type="text" inputmode="decimal" maxlength="12" autocomplete="off" placeholder="Например, 1500" value="${esc(cost)}"></div>`}
     ${sheet.error ? `<p class="err" role="alert">${esc(sheet.error)}</p>` : ''}
@@ -1338,28 +1782,72 @@ function renderSheetBody() {
   if (sheet.doc) initDocCrop();
 }
 
+// Выбор «Напомнить снова через»: готовые месяцы, своё число, «не надо» и сезон (окно новой записи и «Изменить напоминание»)
+function repField(repN, remind) {
+  return `<div class="field" role="group" aria-label="Напомнить снова"><span class="lbl" aria-hidden="true">Напомнить снова через</span>
+      <div class="rpick">${[[1, '1', 'месяц'], [3, '3', 'месяца'], [6, '6', 'месяцев'], [12, '1', 'год']].map(([m, n, u]) => `<button type="button" data-act="sheet-months" data-v="${m}" aria-pressed="${sheet.rep === 'm' && sheet.months === m}" aria-label="Через ${n} ${u}"><b>${n}</b><small>${u}</small></button>`).join('')}<button type="button" class="word" data-act="sheet-rep" data-v="custom" aria-pressed="${sheet.rep === 'custom'}">Своё</button><button type="button" class="word" data-act="sheet-rep" data-v="none" aria-pressed="${sheet.rep === 'none'}">Не надо</button></div>
+      ${sheet.rep === 'custom' ? `<div class="rep-custom"><label class="sr" for="f-rep-n">Через сколько</label><input id="f-rep-n" type="number" inputmode="numeric" min="1" max="${REP_MAX[sheet.repUnit]}" value="${esc(repN)}"><div class="seg">${[['d', 'дней'], ['w', 'недель'], ['m', 'месяцев']].map(([u, l]) => `<button type="button" data-act="sheet-unit" data-v="${u}" aria-pressed="${sheet.repUnit === u}">${l}</button>`).join('')}</div></div>` : ''}
+      ${sheet.rep === 'none' ? '' : `<div class="seg season-pick" role="group" aria-label="Когда напоминать"><button type="button" data-act="sheet-season" data-v="" aria-pressed="${!sheet.season}">Круглый год</button><button type="button" data-act="sheet-season" data-v="1" aria-pressed="${!!sheet.season}">Только в сезон</button></div>
+      ${sheet.season ? `<div class="season-months"><label>с <select id="f-s-from" aria-label="Сезон начинается">${MONF.map((m, i) => `<option value="${i + 1}" ${sheet.sFrom === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select></label><label>по <select id="f-s-to" aria-label="Сезон заканчивается">${MONN.map((m, i) => `<option value="${i + 1}" ${sheet.sTo === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select></label></div>` : ''}`}
+      <span class="small" id="rep-hint">${remind}</span></div>`;
+}
+
 // Интервал из окна записи: готовый вариант в месяцах, своё число дней/недель/месяцев или без напоминания
 function sheetRep(nRaw) {
-  if (sheet.rep === 'none') return { months: 0, repDays: 0 };
+  if (sheet.rep === 'none') return { months: 0, repDays: 0, season: '' };
+  const season = sheet.season ? `${sheet.sFrom}-${sheet.sTo}` : '';
   if (sheet.rep === 'custom') {
     const n = Number(nRaw);
     if (!(Number.isInteger(n) && n >= 1 && n <= REP_MAX[sheet.repUnit])) return null;
-    return sheet.repUnit === 'm' ? { months: n, repDays: 0 } : { months: 0, repDays: sheet.repUnit === 'w' ? n * 7 : n };
+    return sheet.repUnit === 'm' ? { months: n, repDays: 0, season } : { months: 0, repDays: sheet.repUnit === 'w' ? n * 7 : n, season };
   }
-  return { months: sheet.months, repDays: 0 };
+  return { months: sheet.months, repDays: 0, season };
 }
 function repHint(base, nRaw) {
   const rp = sheetRep(nRaw);
   if (!rp) return `Напишите число от 1 до ${REP_MAX[sheet.repUnit]}.`;
-  return hasRep(rp) ? `Напомним ${fmtFull(nextByRep(base, rp))} (${everyRec(rp)}). Срок подскажет ветеринар или инструкция.` : 'Без напоминания.';
+  return hasRep(rp) ? `${remindWord()} ${fmtFull(nextDue(base, rp))} (${everyRec(rp)}). Срок подскажет ветеринар или инструкция.` : 'Без напоминания.';
 }
 // Подсказка «Напомним …» меняется сразу, пока вводишь число или дату
 function updateRepHint() {
   const h = document.getElementById('rep-hint');
-  if (!h || !sheet || sheet.kind !== 'add') return;
+  if (!h || !sheet || (sheet.kind !== 'add' && sheet.kind !== 'rep')) return;
   const d = document.getElementById('f-date'), n = document.getElementById('f-rep-n');
   if (n) sheet.repN = n.value;
-  h.textContent = repHint(d && isIso(d.value) ? parseIso(d.value) : T, n ? n.value : sheet.repN);
+  const rec = sheet.kind === 'rep' && db.records.find(x => x.id === sheet.id);
+  h.textContent = repHint(rec ? parseIso(rec.date) : d && isIso(d.value) ? parseIso(d.value) : T, n ? n.value : sheet.repN);
+}
+
+// Напоминание считается от последней записи дела — менять его можно только у неё
+const REP_TYPES = ['treatment', 'vaccine', 'groom'];
+const isLatestRec = r => !db.records.some(x => x !== r && x.pet === r.pet && x.type === r.type && x.title.toLowerCase() === r.title.toLowerCase() && (x.date > r.date || (x.date === r.date && x.created > r.created)));
+const canEditRep = r => REP_TYPES.includes(r.type) && isLatestRec(r);
+function openRepEdit(id) {
+  const r = db.records.find(x => x.id === id);
+  if (!r) return;
+  const season = parseSeason(r.season);
+  const st = { kind: 'rep', id, rep: 'none', months: 1, repUnit: 'w', repN: 2, season: !!season, sFrom: season ? season.from : 3, sTo: season ? season.to : 11, error: '' };
+  if (r.repDays) Object.assign(st, { rep: 'custom', repUnit: r.repDays % 7 ? 'd' : 'w', repN: r.repDays % 7 ? r.repDays : r.repDays / 7 });
+  else if (r.months && [1, 3, 6, 12].includes(r.months)) Object.assign(st, { rep: 'm', months: r.months });
+  else if (r.months) Object.assign(st, { rep: 'custom', repUnit: 'm', repN: r.months });
+  sheet = st;
+  renderSheet();
+}
+function saveRep() {
+  const r = db.records.find(x => x.id === sheet.id);
+  if (!r) { closeSheet(); return; }
+  const el = document.getElementById('f-rep-n');
+  const rp = sheetRep(el ? el.value : sheet.repN);
+  if (!rp) { sheet.error = `Через сколько напомнить: число от 1 до ${REP_MAX[sheet.repUnit]}.`; renderSheet(); return; }
+  if (sheet.rep !== 'none' && sheet.season && sheet.sFrom === sheet.sTo) { sheet.error = 'Сезон: месяцы «с» и «по» должны быть разными.'; renderSheet(); return; }
+  r.months = rp.months; r.repDays = rp.repDays; r.season = rp.season || '';
+  r.snooze = null; // перенос «Завтра» относился к старому сроку
+  touch('record', r);
+  if (!save()) return;
+  closeSheet(); render();
+  if (!hasRep(r)) { toast('Напоминание выключено'); return; }
+  const next = nextDue(parseIso(r.date), r);
+  toast(next <= T ? `Сохранено. Срок уже наступил (${fmtFull(next)}) — дело на главной` : `Сохранено. ${remindWord()} ${fmtFull(next)}`);
 }
 
 function newRecord(fields) {
@@ -1394,19 +1882,20 @@ function saveAdd() {
     const repEl = document.getElementById('f-rep-n');
     const rp = isV || isC ? { months: 0, repDays: 0 } : sheetRep(repEl ? repEl.value : sheet.repN);
     if (!rp) { sheet.error = `Через сколько напомнить: число от 1 до ${REP_MAX[sheet.repUnit]}.`; renderSheet(); return; }
+    if (sheet.rep !== 'none' && sheet.season && sheet.sFrom === sheet.sTo) { sheet.error = 'Сезон: месяцы «с» и «по» должны быть разными.'; renderSheet(); return; }
     let title = document.getElementById('f-title').value.trim();
     if (!title && (concl || meds)) title = 'Приём у врача';
     if (!title) { sheet.error = TYPES[sheet.type].err; renderSheet(); return; }
     const costRaw = document.getElementById('f-cost').value.replace(/\s/g, '').replace(',', '.').replace(/₽|р\.?$/i, '');
     const cost = costRaw ? Number(costRaw) : 0;
     if (costRaw && !(cost >= 0 && cost < 1e7)) { sheet.error = 'Напишите сумму числом, например 1500.'; renderSheet(); return; }
-    newRecord({ pet: p.id, type: sheet.type, title: title.slice(0, 80), date: dateVal, months: rp.months, repDays: rp.repDays, note: document.getElementById('f-note').value.trim().slice(0, 300), cost: Math.round(cost * 100) / 100, ...(isV ? { concl, meds, nextDate } : {}), ...(isC ? { days, perDay: sheet.perDay, marks: {}, stopped: '' } : {}) });
+    newRecord({ pet: p.id, type: sheet.type, title: title.slice(0, 80), date: dateVal, months: rp.months, repDays: rp.repDays, season: rp.season || '', note: document.getElementById('f-note').value.trim().slice(0, 300), cost: Math.round(cost * 100) / 100, ...(isV ? { concl, meds, nextDate } : {}), ...(isC ? { days, perDay: sheet.perDay, marks: {}, stopped: '' } : {}) });
     if (!save()) return;
     if (isC) { toast(`Курс записан: ${days} ${plural(days, 'день', 'дня', 'дней')}, ${timesText(sheet.perDay)}. Отмечайте приёмы на главной.`); closeSheet(); render(); return; }
-    const nextDue = isV ? (nextDate ? parseIso(nextDate) : null) : hasRep(rp) ? nextByRep(parseIso(dateVal), rp) : null;
+    const nextDue = isV ? (nextDate ? parseIso(nextDate) : null) : hasRep(rp) ? nextDue(parseIso(dateVal), rp) : null;
     toast(!nextDue ? 'Записали без напоминания'
       : nextDue <= T ? `Записали. Следующий срок уже наступил (${fmtFull(nextDue)}) — дело на главной`
-      : `Записали. Напомним ${fmtFull(nextDue)}`);
+      : `Записали. ${remindWord()} ${fmtFull(nextDue)}`);
   }
   closeSheet(); render();
 }
@@ -1464,11 +1953,29 @@ document.addEventListener('click', e => {
   const act = el.dataset.act, v = el.dataset.v;
   switch (act) {
     case 'add': openAdd(el.dataset.type, el.dataset.pet); break;
+    case 'goto-seg': {
+      state.seg = v; state.segAnim = true; pv.histAll = false;
+      render();
+      const h = document.getElementById('pv-records');
+      if (h) h.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+      break;
+    }
+    case 'pv-year': case 'pv-filter': case 'pv-more': case 'pv-hist': {
+      // страница остаётся на месте
+      const y = window.scrollY;
+      if (act === 'pv-year') pv.year = Number(v);
+      else if (act === 'pv-filter') { pv.filter = v; pv.limit = 12; }
+      else if (act === 'pv-hist') pv.histAll = true;
+      else pv.limit += 20;
+      render();
+      window.scrollTo(0, y);
+      break;
+    }
     case 'seg': {
       // Страница остаётся на месте: запоминаем прокрутку и не даём странице стать короче, пока открыт этот питомец
       const y = window.scrollY;
       main.style.minHeight = Math.max(main.offsetHeight, parseFloat(main.style.minHeight) || 0) + 'px';
-      state.seg = v; state.segAnim = true;
+      state.seg = v; state.segAnim = true; pv.histAll = false;
       render();
       window.scrollTo(0, y);
       const b = document.querySelector(`[data-act="seg"][data-v="${v}"]`);
@@ -1478,8 +1985,8 @@ document.addEventListener('click', e => {
     case 'done': {
       const r = db.records.find(x => x.id === el.dataset.id);
       if (!r) break;
-      newRecord({ pet: r.pet, type: r.type, title: r.title, date: iso(T), months: r.months, repDays: r.repDays || 0, note: r.note });
-      if (save()) toast(`${petById(r.pet).name}: отмечено.${hasRep(r) ? ` Следующий раз ${fmtFull(nextByRep(T, r))}` : ''}`);
+      newRecord({ pet: r.pet, type: r.type, title: r.title, date: iso(T), months: r.months, repDays: r.repDays || 0, season: r.season || '', note: r.note });
+      if (save()) toast(`${petById(r.pet).name}: отмечено.${hasRep(r) ? ` Следующий раз ${fmtFull(nextDue(T, r))}` : ''}`);
       render(); break;
     }
     case 'snooze': {
@@ -1490,6 +1997,7 @@ document.addEventListener('click', e => {
       if (save()) toast(`Хорошо, напомним завтра, ${fmtFull(addDays(T, 1))}`);
       render(); break;
     }
+    case 'edit-rep': e.preventDefault(); openRepEdit(el.dataset.id); break;
     case 'del-record': {
       const r = db.records.find(x => x.id === el.dataset.id);
       if (!r) break;
@@ -1561,6 +2069,24 @@ document.addEventListener('click', e => {
       meta.recoveryKey = r.recoveryKey; persist(); closeSheet(); render(); toast('Новый ключ готов. Сохраните его.');
     }) }); break;
     case 'sync-now': sync(); toast('Пробуем подключиться…'); break;
+    case 'install-help': sheet = { kind: 'install' }; renderSheet(); break;
+    case 'install-ok':
+      try { localStorage.setItem(INSTALL_KEY, '1'); } catch (err) { /* покажем ещё раз — не страшно */ }
+      closeSheetAnimated(); break;
+    case 'install-native':
+      try { localStorage.setItem(INSTALL_KEY, '1'); } catch (err) { /* не страшно */ }
+      closeSheet();
+      if (installPrompt) { installPrompt.prompt(); installPrompt = null; }
+      break;
+    case 'push-on': enablePush(Number(document.getElementById('push-hour').value)); break;
+    case 'push-off': disablePush(); break;
+    case 'push-test':
+      api('POST', '/api/push/test').then(() => toast('Отправили. Уведомление придёт через несколько секунд.'))
+        .catch(err => {
+          if (err.code === 'no_subscription' || err.code === 'subscription_gone') { delete meta.push; persist(); render(); toast('Подписка устарела. Включите напоминания ещё раз.'); }
+          else toast(err.status === 0 ? 'Нет связи с сервером.' : 'Не получилось отправить. Попробуйте позже.');
+        });
+      break;
     case 'sheet-cancel': closeSheetAnimated(); break;
     case 'confirm-ok': if (sheet && sheet.onOk && !sheet.busy) sheet.onOk(); break;
     case 'sheet-pet': sheet.pet = v; renderSheet(); break;
@@ -1568,6 +2094,7 @@ document.addEventListener('click', e => {
     case 'sheet-months': sheet.months = Number(v); sheet.rep = 'm'; renderSheet(); break;
     case 'sheet-rep': sheet.rep = v; renderSheet(); if (v === 'custom') { const n = document.getElementById('f-rep-n'); if (n) n.focus(); } break;
     case 'sheet-unit': sheet.repUnit = v; renderSheet(); break;
+    case 'sheet-season': sheet.season = !!v; renderSheet(); break;
     case 'sheet-perday': sheet.perDay = Number(v); renderSheet(); break;
     case 'sheet-days': document.getElementById('f-days').value = v; break;
     case 'take': case 'untake': {
@@ -1598,6 +2125,7 @@ function formError(id, text) { const el = document.getElementById(id); if (el) {
 document.addEventListener('submit', async e => {
   const f = e.target;
   if (f.id === 'add-form') { e.preventDefault(); saveAdd(); return; }
+  if (f.id === 'rep-form') { e.preventDefault(); saveRep(); return; }
 
   if (f.id === 'pet-form') {
     e.preventDefault();
@@ -1671,7 +2199,12 @@ document.addEventListener('submit', async e => {
     }
   }
 });
-document.addEventListener('change', e => { if (e.target.id === 'f-date' && sheet && sheet.kind === 'add') renderSheet(); });
+document.addEventListener('change', e => {
+  if (e.target.id === 'f-date' && sheet && sheet.kind === 'add') renderSheet();
+  if ((e.target.id === 'f-s-from' || e.target.id === 'f-s-to') && sheet && (sheet.kind === 'add' || sheet.kind === 'rep')) { sheet[e.target.id === 'f-s-from' ? 'sFrom' : 'sTo'] = Number(e.target.value); updateRepHint(); }
+  // Смена часа у включённых напоминаний сохраняется сразу
+  if (e.target.id === 'push-hour' && meta && meta.push) enablePush(Number(e.target.value));
+});
 // Сообщение об ошибке в форме прячется, как только человек начал исправлять
 document.addEventListener('input', e => {
   const err = e.target.form && e.target.form.querySelector('.err'); if (err && err.id) err.hidden = true;
@@ -1703,6 +2236,7 @@ window.addEventListener('storage', e => {
 // ---------- Запуск ----------
 try { localStorage.removeItem(THEME_KEY); } catch (e) { /* не страшно */ }
 render();
+offerInstall();
 sync();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('/sw.js').catch(() => { /* без офлайна сайт всё равно работает */ });

@@ -1,6 +1,6 @@
 {
   "name": "hvostik-web",
-  "version": "1.9.6",
+  "version": "1.15.3",
   "private": true,
   "type": "module",
   "scripts": {

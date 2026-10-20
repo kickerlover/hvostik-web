@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Хвостик на iPhone</title>
+  <title>Хвостик на телефоне</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <!-- Эмуляция iPhone для проверки сайта с компьютера: рамка телефона, внутри — настоящий сайт.
        Данные общие с сайтом в этом браузере (тот же адрес). -->
@@ -27,10 +27,23 @@
     .status .icons { display: flex; gap: 6px; align-items: center; }
     .island { position: absolute; left: 50%; top: 11px; transform: translateX(-50%); width: 124px; height: 36px; border-radius: 20px; background: #000; display: var(--island); }
     .notch { position: absolute; left: 50%; top: 0; transform: translateX(-50%); width: 160px; height: 32px; border-radius: 0 0 20px 20px; background: #000; display: var(--notch); }
+    .hole { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); width: 12px; height: 12px; border-radius: 50%; background: #000; display: var(--hole); }
+    .phone.land .hole { top: 50%; left: 8px; transform: translateY(-50%); }
     iframe { flex: 1; width: 100%; border: 0; display: block; background: var(--app); }
     .home { flex: none; height: var(--bottom); position: relative; }
     .home::after { content: ""; position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); width: 134px; height: 5px; border-radius: 3px; background: #000; display: var(--indicator); }
     .button { display: var(--home-btn); position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: 54px; height: 54px; border-radius: 50%; border: 2px solid #3A3A3C; background: #111; cursor: pointer; padding: 0; }
+    /* Телефон боком: строки состояния нет, вырез под камеру слева, по бокам и снизу — безопасные поля, как у настоящего iPhone */
+    .phone.land .screen { width: var(--h); height: var(--w); display: grid; grid-template-columns: var(--side) minmax(0, 1fr) var(--side); grid-template-rows: minmax(0, 1fr) var(--bottom-l); }
+    .phone.land .status { display: none; }
+    .phone.land iframe { grid-column: 2; grid-row: 1; height: 100%; }
+    .phone.land .home { grid-column: 2; grid-row: 2; height: auto; }
+    .phone.land .home::after { bottom: 6px; }
+    .phone.land .island { top: 50%; left: 11px; transform: translateY(-50%); width: 36px; height: 124px; }
+    .phone.land .notch { top: 50%; left: 0; transform: translateY(-50%); width: 32px; height: 160px; border-radius: 0 20px 20px 0; }
+    .phone.land .button { left: auto; right: 12px; bottom: auto; top: 50%; transform: translateY(-50%); }
+    .phone.land::before { left: 22%; top: -4px; width: 60px; height: 3px; }
+    .phone.land::after { left: auto; right: 26%; top: auto; bottom: -4px; width: 90px; height: 3px; }
     /* Открыли эту страницу с телефона — рамка не нужна */
     @media (max-width: 500px) {
       .bar, .hint { display: none; }
@@ -38,12 +51,14 @@
       .phone::before, .phone::after, .button { display: none; }
       .screen { width: 100vw; height: 100dvh; border-radius: 0; }
       .status, .home { display: none; }
+      .phone.land .screen { width: 100vw; height: 100dvh; display: flex; }
     }
   </style>
 </head>
 <body>
   <div class="bar">
     <select id="model" aria-label="Модель телефона"></select>
+    <button id="rotate" type="button" aria-pressed="false">Повернуть</button>
     <button id="reload" type="button">Обновить</button>
     <button id="home" type="button">На главную</button>
   </div>
@@ -51,9 +66,9 @@
   <div class="stage" id="stage">
     <div class="phone" id="phone">
       <div class="screen">
+        <span class="island"></span><span class="notch"></span><span class="hole"></span>
         <div class="status">
           <span id="clock">9:41</span>
-          <span class="island"></span><span class="notch"></span>
           <span class="icons" aria-hidden="true">
             <svg width="18" height="12" viewBox="0 0 18 12"><rect x="0" y="8" width="3" height="4" rx="1" fill="currentColor"/><rect x="5" y="5" width="3" height="7" rx="1" fill="currentColor"/><rect x="10" y="2.5" width="3" height="9.5" rx="1" fill="currentColor"/><rect x="15" y="0" width="3" height="12" rx="1" fill="currentColor"/></svg>
             <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 11.5 5.6 9a3.4 3.4 0 0 1 4.8 0L8 11.5ZM3.4 6.8a6.5 6.5 0 0 1 9.2 0l-1.3 1.3a4.6 4.6 0 0 0-6.6 0L3.4 6.8ZM1.2 4.6a9.6 9.6 0 0 1 13.6 0l-1.3 1.3a7.8 7.8 0 0 0-11 0L1.2 4.6Z" fill="currentColor"/></svg>
@@ -68,16 +83,36 @@
   </div>
   <script>
     // Размеры экрана в точках (как видит сайт), отступы под строку состояния и полоску внизу.
+    // Боком: side — поля слева и справа (вырез под камеру), bl — поле снизу под полоской «домой».
+    // Размеры айфонов — по справочникам yesviz.com и sizzy.co; у Android они зависят от настройки «Размер экрана», здесь — заводские.
     const MODELS = {
-      se:    { name: 'iPhone SE (маленький)', w: 375, h: 667, top: 20, bottom: 0,  kind: 'button' },
-      mini:  { name: 'iPhone 13 mini',        w: 375, h: 812, top: 50, bottom: 34, kind: 'notch' },
-      i16:   { name: 'iPhone 16',             w: 393, h: 852, top: 54, bottom: 34, kind: 'island' },
-      plus:  { name: 'iPhone 16 Pro Max',     w: 440, h: 956, top: 62, bottom: 34, kind: 'island' }
+      se:    { group: 'iPhone', name: 'iPhone SE (маленький)',                   w: 375, h: 667, top: 20, bottom: 0,  side: 0,  bl: 0,  kind: 'button' },
+      mini:  { group: 'iPhone', name: 'iPhone 13 mini',                          w: 375, h: 812, top: 50, bottom: 34, side: 50, bl: 21, kind: 'notch' },
+      i13:   { group: 'iPhone', name: 'iPhone 13, 13 Pro, 14, 16e',              w: 390, h: 844, top: 47, bottom: 34, side: 47, bl: 21, kind: 'notch' },
+      i13pm: { group: 'iPhone', name: 'iPhone 13 Pro Max, 14 Plus',              w: 428, h: 926, top: 47, bottom: 34, side: 47, bl: 21, kind: 'notch' },
+      i16:   { group: 'iPhone', name: 'iPhone 14 Pro, 15, 15 Pro, 16',           w: 393, h: 852, top: 59, bottom: 34, side: 59, bl: 21, kind: 'island' },
+      i15pm: { group: 'iPhone', name: 'iPhone 14 Pro Max, 15 Plus/Pro Max, 16 Plus', w: 430, h: 932, top: 59, bottom: 34, side: 59, bl: 21, kind: 'island' },
+      i17:   { group: 'iPhone', name: 'iPhone 16 Pro, 17, 17 Pro, 18 Pro',       w: 402, h: 874, top: 62, bottom: 34, side: 62, bl: 21, kind: 'island' },
+      air:   { group: 'iPhone', name: 'iPhone Air',                              w: 420, h: 912, top: 62, bottom: 34, side: 62, bl: 21, kind: 'island' },
+      plus:  { group: 'iPhone', name: 'iPhone 16/17/18 Pro Max',                 w: 440, h: 956, top: 62, bottom: 34, side: 62, bl: 21, kind: 'island' },
+      gs:    { group: 'Android', name: 'Samsung Galaxy S23, S24, S25',           w: 360, h: 780, top: 28, bottom: 16, side: 0,  bl: 16, kind: 'hole' },
+      gsp:   { group: 'Android', name: 'Samsung Galaxy S24+, S25+',              w: 384, h: 832, top: 28, bottom: 16, side: 0,  bl: 16, kind: 'hole' },
+      gsu:   { group: 'Android', name: 'Samsung Galaxy S25 Ultra',               w: 412, h: 891, top: 28, bottom: 16, side: 0,  bl: 16, kind: 'hole' },
+      ga:    { group: 'Android', name: 'Samsung Galaxy A, Google Pixel 7–9',     w: 412, h: 915, top: 28, bottom: 16, side: 0,  bl: 16, kind: 'hole' },
+      px10:  { group: 'Android', name: 'Google Pixel 10',                        w: 360, h: 808, top: 28, bottom: 16, side: 0,  bl: 16, kind: 'hole' },
+      xi:    { group: 'Android', name: 'Xiaomi, Redmi Note',                     w: 393, h: 873, top: 28, bottom: 16, side: 0,  bl: 16, kind: 'hole' },
+      fold:  { group: 'Android', name: 'Galaxy Z Fold (внешний экран)',          w: 344, h: 882, top: 28, bottom: 16, side: 0,  bl: 16, kind: 'hole' }
     };
+    let land = false;
     const phone = document.getElementById('phone');
     const frame = document.getElementById('app');
     const select = document.getElementById('model');
-    for (const [id, m] of Object.entries(MODELS)) select.add(new Option(`${m.name} · ${m.w}×${m.h}`, id));
+    const rotateBtn = document.getElementById('rotate');
+    for (const g of ['iPhone', 'Android']) {
+      const og = document.createElement('optgroup'); og.label = g;
+      for (const [id, m] of Object.entries(MODELS)) if (m.group === g) og.append(new Option(`${m.name} · ${m.w}×${m.h}`, id));
+      select.append(og);
+    }
 
     function apply(id) {
       const m = MODELS[id] || MODELS.i16;
@@ -87,17 +122,24 @@
       s.setProperty('--h', m.h + 'px');
       s.setProperty('--top', m.top + 'px');
       s.setProperty('--bottom', m.bottom + 'px');
-      s.setProperty('--bezel', isBtn ? '70px 14px 80px' : '14px');
-      s.setProperty('--r-outer', isBtn ? '56px' : '62px');
-      s.setProperty('--r-inner', isBtn ? '4px' : '48px');
-      s.setProperty('--status-pad', isBtn ? '0 8px' : '6px 30px 0 34px');
+      s.setProperty('--side', m.side + 'px');
+      s.setProperty('--bottom-l', m.bl + 'px');
+      const isHole = m.kind === 'hole';
+      s.setProperty('--bezel', isBtn ? (land ? '14px 80px 14px 70px' : '70px 14px 80px') : isHole ? '10px' : '14px');
+      s.setProperty('--hole', isHole ? 'block' : 'none');
+      phone.classList.toggle('land', land);
+      rotateBtn.setAttribute('aria-pressed', String(land));
+      rotateBtn.textContent = land ? 'Вертикально' : 'Повернуть';
+      s.setProperty('--r-outer', isBtn ? '56px' : isHole ? '40px' : '62px');
+      s.setProperty('--r-inner', isBtn ? '4px' : isHole ? '30px' : '48px');
+      s.setProperty('--status-pad', isBtn ? '0 8px' : isHole ? '0 18px' : '6px 30px 0 34px');
       s.setProperty('--island', m.kind === 'island' ? 'block' : 'none');
       s.setProperty('--notch', m.kind === 'notch' ? 'block' : 'none');
       s.setProperty('--indicator', isBtn ? 'none' : 'block');
       s.setProperty('--home-btn', isBtn ? 'block' : 'none');
-      document.querySelector('.status').style.fontSize = isBtn ? '12px' : '16px';
+      document.querySelector('.status').style.fontSize = isBtn || isHole ? '12px' : '16px';
       select.value = id;
-      try { localStorage.setItem('hvostik-emu-model', id); } catch (e) {}
+      try { localStorage.setItem('hvostik-emu-model', id); localStorage.setItem('hvostik-emu-land', land ? '1' : ''); } catch (e) {}
       fit();
     }
 
@@ -116,13 +158,14 @@
 
     const goHome = () => { frame.src = '/#/'; };
     select.onchange = () => apply(select.value);
+    rotateBtn.onclick = () => { land = !land; apply(select.value); };
     document.getElementById('reload').onclick = () => frame.contentWindow.location.reload();
     document.getElementById('home').onclick = goHome;
     document.getElementById('homeBtn').onclick = goHome;
     window.addEventListener('resize', fit);
 
     let saved = null;
-    try { saved = localStorage.getItem('hvostik-emu-model'); } catch (e) {}
+    try { saved = localStorage.getItem('hvostik-emu-model'); land = localStorage.getItem('hvostik-emu-land') === '1'; } catch (e) {}
     apply(MODELS[saved] ? saved : 'i16');
     clock();
     setInterval(clock, 15000);
